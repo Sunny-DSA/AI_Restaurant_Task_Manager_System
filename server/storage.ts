@@ -220,10 +220,12 @@ export class DatabaseStorage implements IStorage {
       conditions.push(or(eq(taskTemplates.storeId, storeId), isNull(taskTemplates.storeId)));
     }
     
+    const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+    
     return await db
       .select()
       .from(taskTemplates)
-      .where(and(...conditions))
+      .where(whereClause)
       .orderBy(taskTemplates.title);
   }
 
