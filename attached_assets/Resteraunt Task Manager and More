@@ -1,0 +1,151 @@
+# Restaurant Task-Management App Spec for Replit AI
+
+> **Designer’s Note:**  
+> - Build a full-stack, production-ready web/mobile app.  
+> - Use React (or React Native for mobile) with a modern component library (e.g. Tailwind CSS or Material-UI).  
+> - Backend on Node.js/Express (or your preferred stack) with a RESTful API and PostgreSQL (or similar relational DB).  
+> - Ensure responsive, mobile-first layouts and an intuitive, polished user experience with consistent styling, animations/transitions, and accessible forms.
+
+---
+
+## 1. Roles & Permissions
+
+| Role             | Create Store | Manage Stores & Demographics | Create/Edit Tasks & Checklists | Assign Tasks         | View/Manage Users | Complete Tasks |
+|------------------|:------------:|:----------------------------:|:-------------------------------:|:--------------------:|:-----------------:|:--------------:|
+| **Master Admin** | ✓            | ✓                            | ✓                               | ✓                    | ✓                 | ✓              |
+| **Admin**        | ✗            | ✓                            | ✓                               | ✓                    | ✓                 | ✓              |
+| **Store Manager**| ✗            | View only                    | View only                       | Store / Manager / Employee | View/manage their store’s staff | ✓   |
+| **Employee**     | ✗            | —                            | View only                       | —                    | —                 | ✓              |
+
+- **Implementation:**  
+  - Store `(role, module, action)` permissions in a table.  
+  - Expose an Admin UI for Master Admins to tweak any permission toggle.
+
+---
+
+## 2. Store & User Management
+
+### Store Profiles
+- **Fields:** name, address, contact, timezone, geo-coordinates, geofence radius  
+- Auto-generate a store-specific QR code (embed store ID + secret token).  
+- “Print QR” button exports a branded PDF.
+
+### User Directory
+- Master/Admin can **create**, **invite**, or **bulk-import** users via CSV.  
+- Assign **role** + unique 4-digit **PIN** (for in-store roles) or password + optional 2FA (for Admins).  
+- Invite flow: email/SMS link → set password/PIN → redirect to dashboard.
+
+---
+
+## 3. Task & Checklist Engine
+
+### 3.1 Checklist Templates
+- **Attributes:** title, description, ordered list of tasks  
+- **Recurrence:** none / daily / weekly / monthly / custom cron expression  
+- **Actions:** clone, share across stores, archive
+
+### 3.2 Task Assignment
+- **Levels:**  
+  1. **Entire Store** — all on-shift employees  
+  2. **Store Manager** — managerial tasks or approvals  
+  3. **Specific Employee** — personalized to-dos  
+- **Time Window:** assign to a shift or custom start/end time  
+- **Overrides:** one-time “ad-hoc” tasks vs. part of recurring schedule
+
+### 3.3 Completion Workflow
+1. **Check-In**  
+   - Scan QR → enter PIN → backend verifies geofence (GPS/Wi-Fi SSID/BLE).  
+2. **Task List UI**  
+   - Show assigned checklists grouped by due date/time.  
+   - Each task row: checkbox + required “Upload Photo” button.  
+   - Enforce photo upload before allowing “Complete.”  
+3. **Verification & Notification**  
+   - Auto-timestamp & geostamp photo; store in secure object storage.  
+   - Push notification to manager(s) on each task or full checklist completion.
+
+---
+
+## 4. Verification & Security
+
+- **Geo-Fence Enforcement:** server-side validation, configurable radius, fallback methods.  
+- **QR Code Lifecycle:** auto-rotate monthly or on-demand; optional expiration after N scans/day.  
+- **Authentication:**  
+  - Master/Admin: username + password + optional 2FA (TOTP or SMS).  
+  - Store Manager/Employee: PIN only.  
+  - Enforce session timeouts, secure cookies/JWT with short expiry.
+
+---
+
+## 5. Scheduling & Notifications
+
+- **Scheduler UI:** cron-style builder for advanced recurrences + holiday overrides.  
+- **Alerts & Reminders:**  
+  - In-app push (web/mobile), SMS, email.  
+  - Configurable lead times (e.g. 30 min before).  
+  - Overdue escalations (Manager → Admin → Master Admin).
+
+---
+
+## 6. Reporting & Analytics
+
+- **Dashboards:**  
+  - Store view: today’s completion %, late vs. on-time tasks, photo audit rate.  
+  - Multi-store comparison for chains.  
+- **Exports & Audit Logs:**  
+  - CSV/PDF download of full task history (user, geo, timestamp, photo link).  
+  - Configurable retention periods for compliance (GDPR/CCPA).  
+- **Automated Alerts:** define thresholds (e.g. >10% misses → email Admin).
+
+---
+
+## 7. Security & Compliance
+
+- **Encryption:** TLS everywhere; AES-256 at rest for all media/logs.  
+- **RBAC & Audit Trails:** immutable logs of all CRUD ops; enforce via middleware.  
+- **Pen-Test Readiness:** rate-limit login & photo endpoints; vulnerability-scan scripts.
+
+---
+
+## 8. UI/UX & Onboarding
+
+- **Modern Design:**  
+  - Responsive, mobile-first layout with a component library (Tailwind CSS or Material-UI).  
+  - Smooth animations (task check, modal pop-ups) and consistent design tokens.  
+- **Guided Tours:** contextual tooltips on first use; “Help” overlay with short video snippets.  
+- **Sandbox Mode:** demo store with sample data and “Reset to default” button.
+
+---
+
+## End-to-End Workflows
+
+1. **Master Admin Onboarding**  
+   - Sign up → email verify → create first store → print QR → configure demographics.  
+2. **User Setup**  
+   - Bulk-import/invite → assign role + PIN/password → user accepts invite → lands in dashboard.  
+3. **Template Creation & Assignment**  
+   - Build or clone checklist → set recurrence & assignees (store/manager/employee) → schedule appears in queue.  
+4. **Employee Check-In & Task Completion**  
+   - Scan QR + PIN → tasks appear → photo-upload & checkbox → completion triggers notifications & analytics update.  
+5. **Monitoring & Reporting**  
+   - Managers/Admins review dashboards → export CSV/PDF reports → follow up on flags/alerts.
+
+---
+
+## Phase 2 (Optional) Enhancements
+
+1. Offline Mode & Sync Queue  
+2. Points, Badges & Leaderboards  
+3. Micro-Challenges & Rewards  
+4. White-Label Multi-Tenant & Custom Branding  
+5. In-App Chat & Issue Threads
+
+---
+
+**Replit AI, please scaffold**:  
+- Data models (stores, users, roles, tasks, checklists, photos)  
+- CRUD REST API endpoints with validation & security middleware  
+- React (or React Native) pages/components for each module  
+- Mobile-responsive layouts and polished styling  
+- Unit tests for critical flows (auth, geo-check, photo upload)  
+
+Make it look sharp, modern, and production-ready. Thank you!  
