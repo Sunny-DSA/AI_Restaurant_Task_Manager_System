@@ -60,8 +60,9 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
       photoRequired: false,
       photoCount: 1,
       recurrenceType: "none",
-      assignedStores: [user?.storeId || 0].filter(Boolean),
+      assignedStores: [user?.storeId].filter(Boolean),
       createAsTemplate: false,
+      storeId: user?.storeId || (user?.role === "master_admin" || user?.role === "admin" ? 1 : 0),
     },
   });
 
@@ -115,10 +116,44 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
   }
 
   const onSubmit = (data: CreateTaskData) => {
-    createTaskMutation.mutate({
-      ...data,
-      storeId: user?.storeId!,
-    });
+    // For master admins/admins, use the selected store
+    let targetStoreId = data.storeId;
+    if (!targetStoreId && (user?.role === "master_admin" || user?.role === "admin")) {
+      targetStoreId = data.assignedStores[0] || allStores[0]?.id || 1;
+    }
+    if (!targetStoreId && user?.storeId) {
+      targetStoreId = user.storeId;
+    }
+    
+    if (!targetStoreId) {
+      toast({
+        title: "Store Required",
+        description: "Please select a store for this task.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Clean the data to remove any undefined values
+    const cleanData = {
+      title: data.title,
+      description: data.description || undefined,
+      assigneeType: data.assigneeType,
+      assigneeId: data.assigneeId || undefined,
+      priority: data.priority,
+      estimatedDuration: data.estimatedDuration,
+      photoRequired: data.photoRequired,
+      photoCount: data.photoCount,
+      storeId: targetStoreId,
+      scheduledFor: data.scheduledFor || undefined,
+      dueAt: data.dueAt || undefined,
+      recurrenceType: data.recurrenceType || "none",
+      recurrencePattern: data.recurrencePattern || undefined,
+    };
+
+    console.log("Submitting task data:", cleanData);
+
+    createTaskMutation.mutate(cleanData);
   };
 
   const assigneeType = form.watch("assigneeType");
@@ -300,7 +335,26 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
               </h3>
 
               <div>
-                <Label>Assign to stores</Label>
+                <Label>Primary Store *</Label>
+                <Select
+                  value={form.watch("storeId")?.toString() || ""}
+                  onValueChange={(value) => form.setValue("storeId", parseInt(value))}
+                >
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="Select a store" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(allStores as any[]).map((store: any) => (
+                      <SelectItem key={store.id} value={store.id.toString()}>
+                        {store.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Assign to multiple stores (optional)</Label>
                 <div className="mt-2 space-y-2 max-h-32 overflow-y-auto border rounded-md p-2">
                   {(allStores as any[]).map((store: any) => (
                     <div key={store.id} className="flex items-center space-x-2">
