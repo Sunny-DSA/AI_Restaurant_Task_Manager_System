@@ -3,6 +3,15 @@ import { InsertTask, InsertTaskItem, taskStatusEnum, roleEnum } from "@shared/sc
 import { AuthService } from "./authService";
 
 export class TaskService {
+  static async createTask(taskData: any) {
+    const task = await storage.createTask({
+      ...taskData,
+      status: taskStatusEnum.PENDING,
+    });
+    
+    return task;
+  }
+
   static async createTaskFromTemplate(
     templateId: number,
     storeId: number,

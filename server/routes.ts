@@ -414,6 +414,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/tasks", authenticateToken, requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const taskData = {
+        ...req.body,
+        createdBy: req.user!.id,
+      };
+      
+      const task = await TaskService.createTask(taskData);
+      
+      // Broadcast task creation via WebSocket
+      broadcastTaskUpdate(task);
+      
+      res.status(201).json(task);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Task Lists endpoints
+  app.get("/api/task-lists", authenticateToken, requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const taskLists = await storage.getTaskLists();
+      res.json(taskLists);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/task-lists", authenticateToken, requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const listData = {
+        ...req.body,
+        createdBy: req.user!.id,
+      };
+      
+      const taskList = await storage.createTaskList(listData);
+      res.status(201).json(taskList);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/task-lists/:id", authenticateToken, requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]), async (req: AuthenticatedRequest, res) => {
+    try {
+      await storage.deleteTaskList(parseInt(req.params.id));
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/task-lists/:id/duplicate", authenticateToken, requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const taskList = await storage.duplicateTaskList(parseInt(req.params.id), req.user!.id);
+      res.status(201).json(taskList);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
   app.post("/api/tasks/:id/claim", authenticateToken, async (req: AuthenticatedRequest, res) => {
     try {
       const taskId = parseInt(req.params.id);

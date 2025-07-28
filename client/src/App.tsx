@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import Layout from "@/components/Layout";
 import Dashboard from "@/pages/Dashboard";
 import Tasks from "@/pages/Tasks";
+import TaskLists from "@/pages/TaskLists";
 import Stores from "@/pages/Stores";
 import Users from "@/pages/Users";
 import Reports from "@/pages/Reports";
@@ -33,6 +34,7 @@ function Router() {
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/tasks" component={Tasks} />
+        <Route path="/task-lists" component={TaskLists} />
         <Route path="/stores" component={Stores} />
         <Route path="/users" component={Users} />
         <Route path="/reports" component={Reports} />

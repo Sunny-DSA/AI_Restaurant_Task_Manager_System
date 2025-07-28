@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/hooks/useAuth";
-import { taskApi, userApi } from "@/lib/api";
+import { taskApi, userApi, storeApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,8 +12,9 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { Calendar, Clock, Users, Camera } from "lucide-react";
+import { Calendar, Clock, Users, Camera, Repeat, Building2, Copy } from "lucide-react";
 
 const createTaskSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -27,6 +28,12 @@ const createTaskSchema = z.object({
   scheduledFor: z.string().optional(),
   dueAt: z.string().optional(),
   storeId: z.number(),
+  // Recurring task options
+  recurrenceType: z.enum(["none", "daily", "weekly", "monthly"]).default("none"),
+  recurrencePattern: z.string().optional(),
+  // Multi-store assignment
+  assignedStores: z.array(z.number()).default([]),
+  createAsTemplate: z.boolean().default(false),
 });
 
 type CreateTaskData = z.infer<typeof createTaskSchema>;
@@ -52,6 +59,9 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
       estimatedDuration: 30,
       photoRequired: false,
       photoCount: 1,
+      recurrenceType: "none",
+      assignedStores: [user?.storeId || 0].filter(Boolean),
+      createAsTemplate: false,
     },
   });
 
@@ -66,6 +76,13 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
     queryKey: ["/api/users", { storeId: user?.storeId }],
     queryFn: () => userApi.getUsers(user?.storeId),
     enabled: !!user?.storeId,
+  });
+
+  // Get all stores for multi-store assignment (admin only)
+  const { data: allStores = [] } = useQuery({
+    queryKey: ["/api/stores"],
+    queryFn: () => storeApi.getStores(),
+    enabled: user?.role === "master_admin" || user?.role === "admin",
   });
 
   const createTaskMutation = useMutation({
@@ -106,10 +123,13 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
 
   const assigneeType = form.watch("assigneeType");
   const photoRequired = form.watch("photoRequired");
+  const recurrenceType = form.watch("recurrenceType");
+  const createAsTemplate = form.watch("createAsTemplate");
+  const isMultiStoreAdmin = user?.role === "master_admin" || user?.role === "admin";
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center space-x-2">
             <Users className="w-5 h-5" />
@@ -268,6 +288,107 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
                   </SelectContent>
                 </Select>
               </div>
+            )}
+          </div>
+
+          {/* Store Assignment */}
+          {isMultiStoreAdmin && (
+            <div className="space-y-4">
+              <h3 className="font-medium flex items-center space-x-2">
+                <Building2 className="w-4 h-4" />
+                <span>Store Assignment</span>
+              </h3>
+
+              <div>
+                <Label>Assign to stores</Label>
+                <div className="mt-2 space-y-2 max-h-32 overflow-y-auto border rounded-md p-2">
+                  {(allStores as any[]).map((store: any) => (
+                    <div key={store.id} className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id={`store-${store.id}`}
+                        checked={form.watch("assignedStores").includes(store.id)}
+                        onChange={(e) => {
+                          const currentStores = form.watch("assignedStores");
+                          if (e.target.checked) {
+                            form.setValue("assignedStores", [...currentStores, store.id]);
+                          } else {
+                            form.setValue("assignedStores", currentStores.filter(id => id !== store.id));
+                          }
+                        }}
+                        className="rounded border-gray-300"
+                      />
+                      <Label htmlFor={`store-${store.id}`} className="text-sm font-normal">
+                        {store.name} - {store.address}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Recurring Options */}
+          <div className="space-y-4">
+            <h3 className="font-medium flex items-center space-x-2">
+              <Repeat className="w-4 h-4" />
+              <span>Recurrence</span>
+            </h3>
+
+            <div>
+              <Label>Repeat task</Label>
+              <Select
+                value={recurrenceType}
+                onValueChange={(value) => form.setValue("recurrenceType", value as any)}
+              >
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Never repeat</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {recurrenceType !== "none" && (
+              <div>
+                <Label htmlFor="recurrencePattern">Custom pattern (optional)</Label>
+                <Input
+                  id="recurrencePattern"
+                  {...form.register("recurrencePattern")}
+                  placeholder="e.g., Every weekday, Every 2 weeks"
+                  className="mt-1"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Leave blank for standard {recurrenceType} recurrence
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Template Options */}
+          <div className="space-y-4">
+            <h3 className="font-medium flex items-center space-x-2">
+              <Copy className="w-4 h-4" />
+              <span>Template Options</span>
+            </h3>
+
+            <div className="flex items-center space-x-2">
+              <Switch
+                checked={createAsTemplate}
+                onCheckedChange={(checked) => form.setValue("createAsTemplate", checked)}
+                id="createAsTemplate"
+              />
+              <Label htmlFor="createAsTemplate">Save as reusable template</Label>
+            </div>
+
+            {createAsTemplate && (
+              <p className="text-sm text-gray-600">
+                This task will be saved as a template for future use across stores
+              </p>
             )}
           </div>
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a full-stack web application designed for restaurant task management, built with React (TypeScript), Express.js, and PostgreSQL. The system enables restaurant staff to manage tasks, check-in via QR codes, track completion times, and generate reports. It features role-based access control and real-time updates via WebSockets.
+This is a comprehensive full-stack web application designed for multi-tenant restaurant task management, built with React (TypeScript), Express.js, and PostgreSQL. The system enables restaurant chains to manage tasks across multiple stores with advanced features including task templates, recurring schedules, task lists/groups, role-based assignment, QR code check-in, geofencing validation, photo verification, and real-time notifications via WebSockets.
 
 ## User Preferences
 

@@ -3,6 +3,7 @@ import {
   stores,
   tasks,
   taskTemplates,
+  taskLists,
   taskItems,
   taskPhotos,
   taskTransfers,
@@ -16,6 +17,7 @@ import {
   type InsertTask,
   type TaskTemplate,
   type InsertTaskTemplate,
+  type TaskList,
   type TaskItem,
   type InsertTaskItem,
   type TaskPhoto,
@@ -51,6 +53,14 @@ export interface IStorage {
   getTaskTemplates(storeId?: number): Promise<TaskTemplate[]>;
   createTaskTemplate(template: InsertTaskTemplate): Promise<TaskTemplate>;
   updateTaskTemplate(id: number, updates: Partial<TaskTemplate>): Promise<TaskTemplate>;
+  
+  // Task list operations
+  getTaskLists(): Promise<TaskList[]>;
+  getTaskList(id: number): Promise<TaskList | undefined>;
+  createTaskList(listData: any): Promise<TaskList>;
+  updateTaskList(id: number, listData: any): Promise<TaskList>;
+  deleteTaskList(id: number): Promise<boolean>;
+  duplicateTaskList(id: number, createdBy: number): Promise<TaskList>;
   
   // Task operations
   getTask(id: number): Promise<Task | undefined>;
@@ -247,6 +257,74 @@ export class DatabaseStorage implements IStorage {
       .where(eq(taskTemplates.id, id))
       .returning();
     return template;
+  }
+
+  // Task List operations
+  async getTaskLists(): Promise<TaskList[]> {
+    return await db
+      .select()
+      .from(taskLists)
+      .where(eq(taskLists.isActive, true))
+      .orderBy(taskLists.name);
+  }
+
+  async getTaskList(id: number): Promise<TaskList | undefined> {
+    const [list] = await db
+      .select()
+      .from(taskLists)
+      .where(eq(taskLists.id, id));
+    return list || undefined;
+  }
+
+  async createTaskList(listData: any): Promise<TaskList> {
+    const [list] = await db
+      .insert(taskLists)
+      .values({
+        ...listData,
+        updatedAt: new Date(),
+      })
+      .returning();
+    return list;
+  }
+
+  async updateTaskList(id: number, listData: any): Promise<TaskList> {
+    const [list] = await db
+      .update(taskLists)
+      .set({ ...listData, updatedAt: new Date() })
+      .where(eq(taskLists.id, id))
+      .returning();
+    return list;
+  }
+
+  async deleteTaskList(id: number): Promise<boolean> {
+    await db
+      .update(taskLists)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(taskLists.id, id));
+    return true;
+  }
+
+  async duplicateTaskList(id: number, createdBy: number): Promise<TaskList> {
+    const originalList = await this.getTaskList(id);
+    if (!originalList) {
+      throw new Error("Task list not found");
+    }
+
+    const [duplicatedList] = await db
+      .insert(taskLists)
+      .values({
+        name: `${originalList.name} (Copy)`,
+        description: originalList.description,
+        assigneeType: originalList.assigneeType,
+        assigneeId: originalList.assigneeId,
+        recurrenceType: originalList.recurrenceType,
+        recurrencePattern: originalList.recurrencePattern,
+        createdBy,
+        updatedAt: new Date(),
+      })
+      .returning();
+    
+    return duplicatedList;
   }
 
   async getTask(id: number): Promise<Task | undefined> {

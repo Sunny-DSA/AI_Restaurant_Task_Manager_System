@@ -77,9 +77,25 @@ export const stores = pgTable("stores", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Task Lists for grouping related tasks
+export const taskLists = pgTable("task_lists", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdBy: integer("created_by").notNull(),
+  recurrenceType: text("recurrence_type"), // daily, weekly, monthly, custom, none
+  recurrencePattern: text("recurrence_pattern"), // cron expression for custom
+  assigneeType: text("assignee_type").notNull().default("store_wide"), // store_wide, manager, specific_employee
+  assigneeId: integer("assignee_id"), // user ID if specific assignment
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Task templates/checklists
 export const taskTemplates = pgTable("task_templates", {
   id: serial("id").primaryKey(),
+  listId: integer("list_id"), // optional: if part of a task list
   title: text("title").notNull(),
   description: text("description"),
   storeId: integer("store_id"),
@@ -89,9 +105,22 @@ export const taskTemplates = pgTable("task_templates", {
   estimatedDuration: integer("estimated_duration"), // minutes
   photoRequired: boolean("photo_required").default(false),
   photoCount: integer("photo_count").default(1),
+  assigneeType: text("assignee_type").notNull().default("store_wide"), // store_wide, manager, specific_employee
+  assigneeId: integer("assignee_id"), // user ID if specific assignment
+  priority: text("priority").default("normal"), // low, normal, high
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Store assignments for templates and lists
+export const storeAssignments = pgTable("store_assignments", {
+  id: serial("id").primaryKey(),
+  entityType: text("entity_type").notNull(), // 'template' or 'list'
+  entityId: integer("entity_id").notNull(),
+  storeId: integer("store_id").notNull(),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Individual task instances
@@ -202,6 +231,14 @@ export const storesRelations = relations(stores, ({ many }) => ({
   tasks: many(tasks),
   taskTemplates: many(taskTemplates),
   checkIns: many(checkIns),
+  storeAssignments: many(storeAssignments),
+}));
+
+export const storeAssignmentsRelations = relations(storeAssignments, ({ one }) => ({
+  store: one(stores, {
+    fields: [storeAssignments.storeId],
+    references: [stores.id],
+  }),
 }));
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
@@ -233,7 +270,24 @@ export const tasksRelations = relations(tasks, ({ one, many }) => ({
   transfers: many(taskTransfers),
 }));
 
+export const taskListsRelations = relations(taskLists, ({ one, many }) => ({
+  createdBy: one(users, {
+    fields: [taskLists.createdBy],
+    references: [users.id],
+  }),
+  assignee: one(users, {
+    fields: [taskLists.assigneeId],
+    references: [users.id],
+  }),
+  templates: many(taskTemplates),
+  storeAssignments: many(storeAssignments),
+}));
+
 export const taskTemplatesRelations = relations(taskTemplates, ({ one, many }) => ({
+  list: one(taskLists, {
+    fields: [taskTemplates.listId],
+    references: [taskLists.id],
+  }),
   store: one(stores, {
     fields: [taskTemplates.storeId],
     references: [stores.id],
@@ -242,7 +296,12 @@ export const taskTemplatesRelations = relations(taskTemplates, ({ one, many }) =
     fields: [taskTemplates.createdBy],
     references: [users.id],
   }),
+  assignee: one(users, {
+    fields: [taskTemplates.assigneeId],
+    references: [users.id],
+  }),
   tasks: many(tasks),
+  storeAssignments: many(storeAssignments),
 }));
 
 export const taskItemsRelations = relations(taskItems, ({ one }) => ({
@@ -356,6 +415,8 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Store = typeof stores.$inferSelect;
 export type InsertStore = z.infer<typeof insertStoreSchema>;
+export type TaskList = typeof taskLists.$inferSelect;
+export type InsertTaskList = typeof taskLists.$inferInsert;
 export type TaskTemplate = typeof taskTemplates.$inferSelect;
 export type InsertTaskTemplate = z.infer<typeof insertTaskTemplateSchema>;
 export type Task = typeof tasks.$inferSelect;

@@ -6,7 +6,7 @@ import { canAccessPage } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Bell, Home, CheckSquare, Store, Users, BarChart3, Menu, X } from "lucide-react";
+import { Bell, Home, CheckSquare, List, Store, Users, BarChart3, Menu, X } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 interface LayoutProps {
@@ -16,6 +16,7 @@ interface LayoutProps {
 const navigation = [
   { name: "Dashboard", href: "/", icon: Home, key: "dashboard" },
   { name: "Tasks", href: "/tasks", icon: CheckSquare, key: "tasks" },
+  { name: "Task Lists", href: "/task-lists", icon: List, key: "tasks" },
   { name: "Stores", href: "/stores", icon: Store, key: "stores" },
   { name: "Users", href: "/users", icon: Users, key: "users" },
   { name: "Reports", href: "/reports", icon: BarChart3, key: "reports" },
