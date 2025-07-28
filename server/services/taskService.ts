@@ -4,10 +4,15 @@ import { AuthService } from "./authService";
 
 export class TaskService {
   static async createTask(taskData: any) {
-    const task = await storage.createTask({
+    // Convert date strings to Date objects
+    const processedData = {
       ...taskData,
+      scheduledFor: typeof taskData.scheduledFor === 'string' ? new Date(taskData.scheduledFor) : taskData.scheduledFor,
+      dueAt: taskData.dueAt ? (typeof taskData.dueAt === 'string' ? new Date(taskData.dueAt) : taskData.dueAt) : undefined,
       status: taskStatusEnum.PENDING,
-    });
+    };
+    
+    const task = await storage.createTask(processedData);
     
     return task;
   }

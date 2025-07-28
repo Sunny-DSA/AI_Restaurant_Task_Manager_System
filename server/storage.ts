@@ -235,7 +235,7 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(taskTemplates)
-      .where(whereClause)
+      .where(whereClause!)
       .orderBy(taskTemplates.title);
   }
 
@@ -412,12 +412,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTask(insertTask: InsertTask): Promise<Task> {
+    // Remove any undefined values that might cause issues
+    const cleanTask: any = {};
+    
+    // Copy only defined values
+    Object.keys(insertTask).forEach(key => {
+      const value = (insertTask as any)[key];
+      if (value !== undefined) {
+        cleanTask[key] = value;
+      }
+    });
+    
+    // Ensure dates are properly converted if provided
+    if (cleanTask.scheduledFor) {
+      cleanTask.scheduledFor = new Date(cleanTask.scheduledFor);
+    }
+    if (cleanTask.dueAt) {
+      cleanTask.dueAt = new Date(cleanTask.dueAt);
+    }
+    
+    cleanTask.updatedAt = new Date();
+    
     const [task] = await db
       .insert(tasks)
-      .values({
-        ...insertTask,
-        updatedAt: new Date(),
-      })
+      .values(cleanTask)
       .returning();
     return task;
   }
