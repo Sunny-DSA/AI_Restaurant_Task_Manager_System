@@ -112,6 +112,11 @@ export const taskApi = {
     return response.json();
   },
 
+  async createTask(taskData: any): Promise<Task> {
+    const response = await apiRequest("POST", "/api/tasks", taskData);
+    return response.json();
+  },
+
   async uploadPhoto(taskId: number, file: File, location?: { latitude: number; longitude: number }, taskItemId?: number): Promise<any> {
     const formData = new FormData();
     formData.append("photo", file);

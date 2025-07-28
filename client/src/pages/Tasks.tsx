@@ -8,12 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import TaskCard from "@/components/TaskCard";
+import CreateTaskDialog from "@/components/CreateTaskDialog";
 import { Search, Plus, Filter } from "lucide-react";
 
 export default function Tasks() {
   const { user } = useAuth();
   const [activeFilter, setActiveFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   // Get all tasks based on user role and permissions
   const { data: allTasks = [], refetch: refetchTasks } = useQuery({
@@ -148,7 +150,7 @@ export default function Tasks() {
               </div>
               
               {hasPermission(user?.role || "", "create", "tasks") && (
-                <Button>
+                <Button onClick={() => setShowCreateDialog(true)}>
                   <Plus className="w-4 h-4 mr-2" />
                   New Task
                 </Button>
@@ -206,7 +208,7 @@ export default function Tasks() {
               )}
               
               {!searchTerm && hasPermission(user?.role || "", "create", "tasks") && (
-                <Button>
+                <Button onClick={() => setShowCreateDialog(true)}>
                   <Plus className="w-4 h-4 mr-2" />
                   Create New Task
                 </Button>
@@ -215,6 +217,12 @@ export default function Tasks() {
           </Card>
         )}
       </div>
+
+      {/* Create Task Dialog */}
+      <CreateTaskDialog
+        isOpen={showCreateDialog}
+        onClose={() => setShowCreateDialog(false)}
+      />
     </div>
   );
 }
