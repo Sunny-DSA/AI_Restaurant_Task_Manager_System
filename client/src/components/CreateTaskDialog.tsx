@@ -94,6 +94,8 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
         description: "The task has been created and is now available for assignment.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks/my"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks/available"] });
       onClose();
       form.reset();
     },
@@ -149,6 +151,8 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
       dueAt: data.dueAt || undefined,
       recurrenceType: data.recurrenceType || "none",
       recurrencePattern: data.recurrencePattern || undefined,
+      assignedStores: data.assignedStores || [],
+      createAsTemplate: data.createAsTemplate || false,
     };
 
     console.log("Submitting task data:", cleanData);

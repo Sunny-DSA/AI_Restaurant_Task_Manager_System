@@ -20,8 +20,15 @@ export default function Tasks() {
   // Get all tasks based on user role and permissions
   const { data: allTasks = [], refetch: refetchTasks } = useQuery({
     queryKey: ["/api/tasks", user?.storeId],
-    queryFn: () => taskApi.getTasks({ storeId: user?.storeId }),
-    enabled: !!user?.storeId,
+    queryFn: () => {
+      // Master admins and admins can see all tasks across all stores
+      if (user?.role === "master_admin" || user?.role === "admin") {
+        return taskApi.getTasks();
+      }
+      // Store managers and employees see tasks for their specific store
+      return taskApi.getTasks({ storeId: user?.storeId });
+    },
+    enabled: !!user,
   });
 
   // Get user's specific tasks
