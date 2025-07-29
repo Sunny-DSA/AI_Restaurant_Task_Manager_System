@@ -213,77 +213,6 @@ export const checkIns = pgTable("check_ins", {
   checkedOutAt: timestamp("checked_out_at"),
 });
 
-// Inventory Categories
-export const inventoryCategories = pgTable("inventory_categories", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  description: text("description"),
-  isActive: boolean("is_active").default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Inventory Items
-export const inventoryItems = pgTable("inventory_items", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  description: text("description"),
-  categoryId: integer("category_id").notNull(),
-  sku: text("sku").unique(),
-  unit: text("unit").notNull(), // pieces, kg, liters, etc.
-  minimumStock: integer("minimum_stock").default(0),
-  maximumStock: integer("maximum_stock"),
-  unitCost: decimal("unit_cost", { precision: 10, scale: 2 }),
-  supplier: text("supplier"),
-  expirationDays: integer("expiration_days"), // days until expiration
-  isActive: boolean("is_active").default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Store Inventory (current stock levels per store)
-export const storeInventory = pgTable("store_inventory", {
-  id: serial("id").primaryKey(),
-  storeId: integer("store_id").notNull(),
-  itemId: integer("item_id").notNull(),
-  currentStock: integer("current_stock").default(0),
-  reservedStock: integer("reserved_stock").default(0), // stock allocated but not used
-  lastStockCheck: timestamp("last_stock_check"),
-  lastStockCheckBy: integer("last_stock_check_by"),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Inventory Transactions (stock movements)
-export const inventoryTransactions = pgTable("inventory_transactions", {
-  id: serial("id").primaryKey(),
-  storeId: integer("store_id").notNull(),
-  itemId: integer("item_id").notNull(),
-  transactionType: text("transaction_type").notNull(), // in, out, adjustment, waste, transfer
-  quantity: integer("quantity").notNull(),
-  unitCost: decimal("unit_cost", { precision: 10, scale: 2 }),
-  reason: text("reason"),
-  referenceId: text("reference_id"), // PO number, task ID, etc.
-  performedBy: integer("performed_by").notNull(),
-  performedAt: timestamp("performed_at").defaultNow(),
-  notes: text("notes"),
-});
-
-// Stock Alerts
-export const stockAlerts = pgTable("stock_alerts", {
-  id: serial("id").primaryKey(),
-  storeId: integer("store_id").notNull(),
-  itemId: integer("item_id").notNull(),
-  alertType: text("alert_type").notNull(), // low_stock, out_of_stock, overstocked, expiring_soon
-  alertLevel: text("alert_level").notNull(), // info, warning, critical
-  currentStock: integer("current_stock"),
-  threshold: integer("threshold"),
-  message: text("message").notNull(),
-  isResolved: boolean("is_resolved").default(false),
-  resolvedBy: integer("resolved_by"),
-  resolvedAt: timestamp("resolved_at"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
 // Relations
 export const usersRelations = relations(users, ({ one, many }) => ({
   store: one(stores, {
@@ -303,9 +232,6 @@ export const storesRelations = relations(stores, ({ many }) => ({
   taskTemplates: many(taskTemplates),
   checkIns: many(checkIns),
   storeAssignments: many(storeAssignments),
-  storeInventory: many(storeInventory),
-  inventoryTransactions: many(inventoryTransactions),
-  stockAlerts: many(stockAlerts),
 }));
 
 export const storeAssignmentsRelations = relations(storeAssignments, ({ one }) => ({
@@ -433,66 +359,6 @@ export const checkInsRelations = relations(checkIns, ({ one }) => ({
   }),
 }));
 
-// Inventory Relations
-export const inventoryCategoriesRelations = relations(inventoryCategories, ({ many }) => ({
-  items: many(inventoryItems),
-}));
-
-export const inventoryItemsRelations = relations(inventoryItems, ({ one, many }) => ({
-  category: one(inventoryCategories, {
-    fields: [inventoryItems.categoryId],
-    references: [inventoryCategories.id],
-  }),
-  storeInventory: many(storeInventory),
-  transactions: many(inventoryTransactions),
-  alerts: many(stockAlerts),
-}));
-
-export const storeInventoryRelations = relations(storeInventory, ({ one }) => ({
-  store: one(stores, {
-    fields: [storeInventory.storeId],
-    references: [stores.id],
-  }),
-  item: one(inventoryItems, {
-    fields: [storeInventory.itemId],
-    references: [inventoryItems.id],
-  }),
-  lastStockCheckBy: one(users, {
-    fields: [storeInventory.lastStockCheckBy],
-    references: [users.id],
-  }),
-}));
-
-export const inventoryTransactionsRelations = relations(inventoryTransactions, ({ one }) => ({
-  store: one(stores, {
-    fields: [inventoryTransactions.storeId],
-    references: [stores.id],
-  }),
-  item: one(inventoryItems, {
-    fields: [inventoryTransactions.itemId],
-    references: [inventoryItems.id],
-  }),
-  performedBy: one(users, {
-    fields: [inventoryTransactions.performedBy],
-    references: [users.id],
-  }),
-}));
-
-export const stockAlertsRelations = relations(stockAlerts, ({ one }) => ({
-  store: one(stores, {
-    fields: [stockAlerts.storeId],
-    references: [stores.id],
-  }),
-  item: one(inventoryItems, {
-    fields: [stockAlerts.itemId],
-    references: [inventoryItems.id],
-  }),
-  resolvedBy: one(users, {
-    fields: [stockAlerts.resolvedBy],
-    references: [users.id],
-  }),
-}));
-
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -544,33 +410,6 @@ export const insertCheckInSchema = createInsertSchema(checkIns).omit({
   checkedInAt: true,
 });
 
-export const insertInventoryCategorySchema = createInsertSchema(inventoryCategories).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertInventoryItemSchema = createInsertSchema(inventoryItems).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertStoreInventorySchema = createInsertSchema(storeInventory).omit({
-  id: true,
-  updatedAt: true,
-});
-
-export const insertInventoryTransactionSchema = createInsertSchema(inventoryTransactions).omit({
-  id: true,
-  performedAt: true,
-});
-
-export const insertStockAlertSchema = createInsertSchema(stockAlerts).omit({
-  id: true,
-  createdAt: true,
-});
-
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -590,18 +429,6 @@ export type TaskTransfer = typeof taskTransfers.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type CheckIn = typeof checkIns.$inferSelect;
 export type InsertCheckIn = z.infer<typeof insertCheckInSchema>;
-
-// Inventory Types
-export type InventoryCategory = typeof inventoryCategories.$inferSelect;
-export type InsertInventoryCategory = z.infer<typeof insertInventoryCategorySchema>;
-export type InventoryItem = typeof inventoryItems.$inferSelect;
-export type InsertInventoryItem = z.infer<typeof insertInventoryItemSchema>;
-export type StoreInventory = typeof storeInventory.$inferSelect;
-export type InsertStoreInventory = z.infer<typeof insertStoreInventorySchema>;
-export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
-export type InsertInventoryTransaction = z.infer<typeof insertInventoryTransactionSchema>;
-export type StockAlert = typeof stockAlerts.$inferSelect;
-export type InsertStockAlert = z.infer<typeof insertStockAlertSchema>;
 
 // Additional validation schemas
 export const loginSchema = z.object({
