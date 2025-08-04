@@ -15,7 +15,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast"; // Adjust path if needed
 import { Store, QrCode, LogIn, Sun, Moon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useLocation } from "wouter";
 import { QrReader } from "react-qr-reader";
 import axios from "axios";
 
@@ -41,7 +41,7 @@ function ThemeToggle() {
 }
 
 export default function LoginPage() {
-  const router = useRouter();
+  const [location, setLocation] = useLocation();
   const { toast } = useToast();
 
   const [email, setEmail] = useState("");
@@ -54,18 +54,19 @@ export default function LoginPage() {
   const handleLogin = async () => {
     setLoading(true);
     try {
-      const role = tab === "admin" ? "admin" : "store";
-      const res = await axios.post("/api/login", { email, password, role });
+      const res = await axios.post("/api/auth/login", { email, password }, {
+        withCredentials: true
+      });
 
-      const { token, user } = res.data;
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify(user));
-
-      router.push("/dashboard");
-    } catch (err) {
+      if (res.data.success) {
+        setLocation("/");
+      } else {
+        throw new Error(res.data.message || "Login failed");
+      }
+    } catch (err: any) {
       toast({
         title: "Login failed",
-        description: "Invalid email or password.",
+        description: err.response?.data?.message || "Invalid email or password.",
         variant: "destructive",
       });
     } finally {
@@ -76,16 +77,19 @@ export default function LoginPage() {
   const handleQRLogin = async (scannedCode: string) => {
     setLoading(true);
     try {
-      const res = await axios.post("/api/qr-login", { code: scannedCode });
-      const { token, user } = res.data;
+      const res = await axios.post("/api/auth/verify-qr", { qrData: scannedCode }, {
+        withCredentials: true
+      });
 
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify(user));
-      router.push("/dashboard");
-    } catch (err) {
+      if (res.data.success) {
+        setLocation("/");
+      } else {
+        throw new Error(res.data.message || "QR verification failed");
+      }
+    } catch (err: any) {
       toast({
         title: "QR Login Failed",
-        description: "Invalid QR code or store not found.",
+        description: err.response?.data?.message || "Invalid QR code or store not found.",
         variant: "destructive",
       });
     } finally {

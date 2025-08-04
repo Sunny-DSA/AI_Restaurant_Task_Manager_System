@@ -225,17 +225,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTaskTemplates(storeId?: number): Promise<TaskTemplate[]> {
-    const conditions = [eq(taskTemplates.isActive, true)];
-    if (storeId) {
-      conditions.push(or(eq(taskTemplates.storeId, storeId), isNull(taskTemplates.storeId)));
-    }
+    let whereClause = eq(taskTemplates.isActive, true);
     
-    const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+    if (storeId) {
+      whereClause = and(
+        eq(taskTemplates.isActive, true),
+        or(eq(taskTemplates.storeId, storeId), isNull(taskTemplates.storeId))
+      );
+    }
     
     return await db
       .select()
       .from(taskTemplates)
-      .where(whereClause!)
+      .where(whereClause)
       .orderBy(taskTemplates.title);
   }
 
