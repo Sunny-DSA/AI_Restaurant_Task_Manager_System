@@ -44,34 +44,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = loginSchema.parse(req.body);
       let user;
-      
+
       if (validatedData.email) {
         // Admin login with email/password
         const { email, password } = req.body;
+
+        if (!email || !password) {
+          return res.status(400).json({ 
+            success: false,
+            message: "Email and password are required" 
+          });
+        }
+
         user = await AuthService.authenticateWithEmail(email, password);
       } else if (validatedData.pin && validatedData.storeId) {
         // Store employee login with PIN
         user = await AuthService.authenticateWithPin(validatedData.pin, validatedData.storeId);
       } else {
-        return res.status(400).json({ message: "Invalid login data" });
+        return res.status(400).json({ 
+          success: false,
+          message: "Invalid login data" 
+        });
       }
-      
+
       // Store user ID in session
       req.session.userId = user.id;
-      
+
       res.json({
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        storeId: user.storeId,
+        success: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          role: user.role,
+          storeId: user.storeId,
+        }
       });
     } catch (error: any) {
-      res.status(401).json({ message: error.message });
+      console.error('Login error:', error);
+
+      // Handle specific authentication errors
+      if (error.message.includes('Invalid') || error.message.includes('credentials')) {
+        return res.status(401).json({ 
+          success: false,
+          message: "Invalid email or password" 
+        });
+      }
+
+      // Handle validation errors
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          success: false,
+          message: "Please check your input and try again" 
+        });
+      }
+
+      // Generic error for unexpected issues
+      res.status(500).json({ 
+        success: false,
+        message: "Server error. Please try again later." 
+      });
     }
   });
-
   app.post("/api/auth/logout", (req: AuthenticatedRequest, res) => {
     req.session.destroy((err) => {
       if (err) {

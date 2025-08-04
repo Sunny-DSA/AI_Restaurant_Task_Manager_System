@@ -1,346 +1,195 @@
-import { useState } from "react";
-import { useAuth } from "@/hooks/useAuth";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+"use client";
+
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import QRScanner from "@/components/QRScanner";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { 
-  Store, 
-  QrCode, 
-  Mail, 
-  Lock, 
-  Hash, 
-  MapPin,
-  CheckCircle,
-  AlertCircle
-} from "lucide-react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast"; // Adjust path if needed
+import { Store, QrCode, LogIn, Sun, Moon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { QrReader } from "react-qr-reader";
+import axios from "axios";
 
-const emailLoginSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
-  password: z.string().min(1, "Password is required"),
-});
+function ThemeToggle() {
+  const [darkMode, setDarkMode] = useState(
+    () => localStorage.getItem("theme") === "dark"
+  );
 
-const pinLoginSchema = z.object({
-  pin: z.string().length(4, "PIN must be exactly 4 digits").regex(/^\d+$/, "PIN must contain only numbers"),
-  storeId: z.number().min(1, "Please select a store or scan QR code"),
-});
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+    localStorage.setItem("theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
 
-type EmailLoginData = z.infer<typeof emailLoginSchema>;
-type PinLoginData = z.infer<typeof pinLoginSchema>;
+  return (
+    <button
+      onClick={() => setDarkMode(!darkMode)}
+      className="absolute top-4 right-4 text-gray-500 dark:text-yellow-300"
+      aria-label="Toggle Dark Mode"
+    >
+      {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+    </button>
+  );
+}
 
-export default function Login() {
-  const [activeTab, setActiveTab] = useState("pin");
+export default function LoginPage() {
+  const router = useRouter();
+  const { toast } = useToast();
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [tab, setTab] = useState("admin");
+
+  const [loading, setLoading] = useState(false);
   const [showQRScanner, setShowQRScanner] = useState(false);
-  const [selectedStore, setSelectedStore] = useState<{ id: number; name: string } | null>(null);
-  const { 
-    login, 
-    isLoggingIn, 
-    verifyQR, 
-    isVerifyingQR, 
-    qrResult, 
-    checkIn, 
-    isCheckingIn 
-  } = useAuth();
 
-  const emailForm = useForm<EmailLoginData>({
-    resolver: zodResolver(emailLoginSchema),
-    defaultValues: {
-      email: "",
-      password: "",
-    },
-  });
+  const handleLogin = async () => {
+    setLoading(true);
+    try {
+      const role = tab === "admin" ? "admin" : "store";
+      const res = await axios.post("/api/login", { email, password, role });
 
-  const pinForm = useForm<PinLoginData>({
-    resolver: zodResolver(pinLoginSchema),
-    defaultValues: {
-      pin: "",
-      storeId: selectedStore?.id || 0,
-    },
-  });
+      const { token, user } = res.data;
+      localStorage.setItem("token", token);
+      localStorage.setItem("user", JSON.stringify(user));
 
-  const onEmailSubmit = (data: EmailLoginData) => {
-    login(data);
+      router.push("/dashboard");
+    } catch (err) {
+      toast({
+        title: "Login failed",
+        description: "Invalid email or password.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const onPinSubmit = (data: PinLoginData) => {
-    login({
-      pin: data.pin,
-      storeId: data.storeId,
-    });
-  };
+  const handleQRLogin = async (scannedCode: string) => {
+    setLoading(true);
+    try {
+      const res = await axios.post("/api/qr-login", { code: scannedCode });
+      const { token, user } = res.data;
 
-  const handleQRSuccess = (storeId: number, storeName: string) => {
-    setSelectedStore({ id: storeId, name: storeName });
-    pinForm.setValue("storeId", storeId);
-    setShowQRScanner(false);
-  };
-
-  const handleQuickCheckIn = () => {
-    if (selectedStore && pinForm.watch("pin").length === 4) {
-      // First verify QR and location, then login
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            checkIn({
-              storeId: selectedStore.id,
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-            });
-            // After successful check-in, proceed with PIN login
-            onPinSubmit({
-              pin: pinForm.watch("pin"),
-              storeId: selectedStore.id,
-            });
-          },
-          () => {
-            // Proceed without location
-            checkIn({ storeId: selectedStore.id });
-            onPinSubmit({
-              pin: pinForm.watch("pin"),
-              storeId: selectedStore.id,
-            });
-          }
-        );
-      } else {
-        checkIn({ storeId: selectedStore.id });
-        onPinSubmit({
-          pin: pinForm.watch("pin"),
-          storeId: selectedStore.id,
-        });
-      }
+      localStorage.setItem("token", token);
+      localStorage.setItem("user", JSON.stringify(user));
+      router.push("/dashboard");
+    } catch (err) {
+      toast({
+        title: "QR Login Failed",
+        description: "Invalid QR code or store not found.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+      setShowQRScanner(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-blue-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md space-y-6">
-        {/* Header */}
-        <div className="text-center space-y-4">
-          <div className="w-16 h-16 bg-primary-600 rounded-2xl flex items-center justify-center mx-auto">
-            <Store className="w-10 h-10 text-white" />
+    <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300 px-4 relative">
+      <ThemeToggle />
+
+      <div className="max-w-md w-full space-y-6">
+        {/* Logo & Title */}
+        <div className="text-center space-y-2">
+          <div className="w-16 h-16 mx-auto bg-primary-600 rounded-xl flex items-center justify-center shadow-lg">
+            <Store className="text-white w-8 h-8" />
           </div>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">RestaurantTask</h1>
-            <p className="text-gray-600">Task Management System</p>
-          </div>
-        </div>
-
-        {/* Login Card */}
-        <Card className="shadow-lg border-0">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-center text-xl">Welcome Back</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="pin" className="flex items-center space-x-2">
-                  <Hash className="w-4 h-4" />
-                  <span>Store Login</span>
-                </TabsTrigger>
-                <TabsTrigger value="admin" className="flex items-center space-x-2">
-                  <Mail className="w-4 h-4" />
-                  <span>Admin Login</span>
-                </TabsTrigger>
-              </TabsList>
-
-              {/* PIN Login Tab */}
-              <TabsContent value="pin" className="space-y-4">
-                {/* Store Selection */}
-                <div className="space-y-3">
-                  <Label>Store Location</Label>
-                  {selectedStore ? (
-                    <div className="flex items-center justify-between p-3 bg-success-50 border border-success-200 rounded-lg">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 bg-success-100 rounded-full flex items-center justify-center">
-                          <CheckCircle className="w-5 h-5 text-success-600" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-success-900">{selectedStore.name}</p>
-                          <p className="text-sm text-success-700">Store verified</p>
-                        </div>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedStore(null);
-                          pinForm.setValue("storeId", 0);
-                        }}
-                        className="text-success-700 hover:text-success-800"
-                      >
-                        Change
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button
-                      onClick={() => setShowQRScanner(true)}
-                      variant="outline"
-                      className="w-full h-12 border-2 border-dashed border-primary-200 hover:border-primary-300 hover:bg-primary-50"
-                    >
-                      <QrCode className="w-5 h-5 mr-2 text-primary-600" />
-                      <span className="text-primary-700">Scan Store QR Code</span>
-                    </Button>
-                  )}
-                </div>
-
-                {/* PIN Input */}
-                <form onSubmit={pinForm.handleSubmit(onPinSubmit)} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="pin">4-Digit PIN</Label>
-                    <Input
-                      id="pin"
-                      type="password"
-                      maxLength={4}
-                      placeholder="Enter your PIN"
-                      {...pinForm.register("pin")}
-                      className="text-center text-2xl tracking-widest font-mono h-12"
-                      disabled={!selectedStore}
-                    />
-                    {pinForm.formState.errors.pin && (
-                      <p className="text-sm text-destructive flex items-center space-x-1">
-                        <AlertCircle className="w-4 h-4" />
-                        <span>{pinForm.formState.errors.pin.message}</span>
-                      </p>
-                    )}
-                    {pinForm.formState.errors.storeId && (
-                      <p className="text-sm text-destructive flex items-center space-x-1">
-                        <AlertCircle className="w-4 h-4" />
-                        <span>{pinForm.formState.errors.storeId.message}</span>
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="space-y-3">
-                    <Button
-                      type="submit"
-                      disabled={isLoggingIn || !selectedStore || pinForm.watch("pin").length !== 4}
-                      className="w-full h-12"
-                    >
-                      {isLoggingIn ? "Logging in..." : "Login"}
-                    </Button>
-
-                    {selectedStore && pinForm.watch("pin").length === 4 && (
-                      <Button
-                        type="button"
-                        onClick={handleQuickCheckIn}
-                        disabled={isCheckingIn || isLoggingIn}
-                        variant="outline"
-                        className="w-full h-12 border-success-200 text-success-700 hover:bg-success-50"
-                      >
-                        {isCheckingIn ? (
-                          "Checking in..."
-                        ) : (
-                          <>
-                            <MapPin className="w-4 h-4 mr-2" />
-                            Quick Check-in & Login
-                          </>
-                        )}
-                      </Button>
-                    )}
-                  </div>
-                </form>
-
-                <div className="text-center">
-                  <p className="text-xs text-gray-500">
-                    Need help? Contact your store manager for your PIN.
-                  </p>
-                </div>
-              </TabsContent>
-
-              {/* Admin Login Tab */}
-              <TabsContent value="admin" className="space-y-4">
-                <form onSubmit={emailForm.handleSubmit(onEmailSubmit)} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="email">Email Address</Label>
-                    <div className="relative">
-                      <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                      <Input
-                        id="email"
-                        type="email"
-                        placeholder="admin@restaurant.com"
-                        {...emailForm.register("email")}
-                        className="pl-10 h-12"
-                      />
-                    </div>
-                    {emailForm.formState.errors.email && (
-                      <p className="text-sm text-destructive flex items-center space-x-1">
-                        <AlertCircle className="w-4 h-4" />
-                        <span>{emailForm.formState.errors.email.message}</span>
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="password">Password</Label>
-                    <div className="relative">
-                      <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                      <Input
-                        id="password"
-                        type="password"
-                        placeholder="Enter your password"
-                        {...emailForm.register("password")}
-                        className="pl-10 h-12"
-                      />
-                    </div>
-                    {emailForm.formState.errors.password && (
-                      <p className="text-sm text-destructive flex items-center space-x-1">
-                        <AlertCircle className="w-4 h-4" />
-                        <span>{emailForm.formState.errors.password.message}</span>
-                      </p>
-                    )}
-                  </div>
-
-                  <Button
-                    type="submit"
-                    disabled={isLoggingIn}
-                    className="w-full h-12"
-                  >
-                    {isLoggingIn ? "Logging in..." : "Login as Admin"}
-                  </Button>
-                </form>
-
-                <div className="text-center">
-                  <p className="text-xs text-gray-500">
-                    Admin access for store management and reporting.
-                  </p>
-                </div>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-
-        {/* Role Badges */}
-        <div className="flex justify-center space-x-2">
-          <Badge variant="secondary" className="text-xs">
-            <Hash className="w-3 h-3 mr-1" />
-            Store Staff
-          </Badge>
-          <Badge variant="secondary" className="text-xs">
-            <Mail className="w-3 h-3 mr-1" />
-            Administrators
-          </Badge>
-        </div>
-
-        {/* Footer */}
-        <div className="text-center">
-          <p className="text-xs text-gray-500">
-            Secure task management for restaurants
+          <h1 className="text-3xl font-bold">RestaurantTask</h1>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
+            Task Management System
           </p>
         </div>
-      </div>
 
-      {/* QR Scanner Modal */}
-      <QRScanner
-        isOpen={showQRScanner}
-        onClose={() => setShowQRScanner(false)}
-        onSuccess={handleQRSuccess}
-      />
+        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-md">
+          <CardHeader>
+            <CardTitle>Welcome Back</CardTitle>
+            <CardDescription>Login to manage restaurant operations</CardDescription>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            <Tabs value={tab} onValueChange={setTab}>
+              <TabsList className="grid w-full grid-cols-2 bg-gray-100 dark:bg-gray-700">
+                <TabsTrigger value="store">Store Login</TabsTrigger>
+                <TabsTrigger value="admin">Admin Login</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            <div>
+              <Label htmlFor="email">Email Address</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="admin@restaurant.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+          </CardContent>
+
+          <CardFooter className="flex flex-col space-y-4">
+            <Button
+              onClick={handleLogin}
+              className="w-full"
+              disabled={loading}
+            >
+              {loading ? "Logging in..." : (
+                <>
+                  <LogIn className="w-4 h-4 mr-2" />
+                  Login as {tab === "admin" ? "Admin" : "Store"}
+                </>
+              )}
+            </Button>
+
+            {tab === "store" && (
+              <>
+                <Button
+                  onClick={() => setShowQRScanner(true)}
+                  className="w-full"
+                  variant="outline"
+                >
+                  <QrCode className="w-5 h-5 mr-2" />
+                  Scan Store QR Code
+                </Button>
+
+                {showQRScanner && (
+                  <div className="mt-4 border rounded-md overflow-hidden">
+                    <QrReader
+                      constraints={{ facingMode: "environment" }}
+                      onResult={(result) => {
+                        if (!!result) {
+                          handleQRLogin(result.getText());
+                        }
+                      }}
+                      containerStyle={{ width: "100%" }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </CardFooter>
+        </Card>
+      </div>
     </div>
   );
 }
