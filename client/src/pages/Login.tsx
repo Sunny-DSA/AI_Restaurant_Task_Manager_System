@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { Store, QrCode, LogIn, Sun, Moon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
@@ -36,12 +37,12 @@ function ThemeToggle() {
 export default function LoginPage() {
   const [location, setLocation] = useLocation();
   const { toast } = useToast();
+  const { login, isLoggingIn, verifyQR, isVerifyingQR } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [tab, setTab] = useState("admin");
 
-  const [loading, setLoading] = useState(false);
   const [showQRScanner, setShowQRScanner] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
 
@@ -57,55 +58,36 @@ export default function LoginPage() {
   }, []);
 
   const handleLogin = async () => {
-    setLoading(true);
     try {
-      const res = await axios.post("/api/auth/login", { email, password }, {
-        withCredentials: true,
-      });
-
-      if (res.data.success) {
-        if (tab === "admin" && rememberMe) {
-          localStorage.setItem("rememberedEmail", email);
-          localStorage.setItem("rememberedTab", "admin");
-        } else {
-          localStorage.removeItem("rememberedEmail");
-          localStorage.removeItem("rememberedTab");
-        }
-        setLocation("/");
+      await login({ email, password });
+      
+      // Handle remember me functionality
+      if (tab === "admin" && rememberMe) {
+        localStorage.setItem("rememberedEmail", email);
+        localStorage.setItem("rememberedTab", "admin");
       } else {
-        throw new Error(res.data.message || "Login failed");
+        localStorage.removeItem("rememberedEmail");
+        localStorage.removeItem("rememberedTab");
       }
+      
+      // Navigation will happen automatically due to authentication state change
     } catch (err: any) {
-      toast({
-        title: "Login failed",
-        description: err.response?.data?.message || "Invalid credentials.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
+      // Error handling is already done in the useAuth hook
+      console.log("Login error:", err);
     }
   };
 
   const handleQRLogin = async (scannedCode: string) => {
-    setLoading(true);
     try {
-      const res = await axios.post("/api/auth/verify-qr", { qrData: scannedCode }, {
-        withCredentials: true,
-      });
-
-      if (res.data.success) {
-        setLocation("/");
-      } else {
-        throw new Error(res.data.message || "QR verification failed");
-      }
+      await verifyQR({ qrData: scannedCode });
+      // Navigation will happen automatically due to authentication state change
     } catch (err: any) {
       toast({
         title: "QR Login Failed",
-        description: err.response?.data?.message || "Invalid QR code or store not found.",
+        description: err.message || "Invalid QR code or store not found.",
         variant: "destructive",
       });
     } finally {
-      setLoading(false);
       setShowQRScanner(false);
     }
   };
@@ -206,8 +188,8 @@ export default function LoginPage() {
               </div>
             )}
 
-            <Button onClick={handleLogin} className="w-full" disabled={loading}>
-              {loading ? "Logging in..." : (
+            <Button onClick={handleLogin} className="w-full" disabled={isLoggingIn}>
+              {isLoggingIn ? "Logging in..." : (
                 <>
                   <LogIn className="w-4 h-4 mr-2" />
                   Login as {tab === "admin" ? "Admin" : "Store"}
