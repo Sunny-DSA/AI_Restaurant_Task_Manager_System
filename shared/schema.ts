@@ -433,14 +433,20 @@ export type InsertCheckIn = z.infer<typeof insertCheckInSchema>;
 // Additional validation schemas
 export const loginSchema = z.object({
   email: z.string().email().optional(),
+  password: z.string().min(1).optional(),   //Added for adminlogin
   pin: z.string().length(4).optional(),
   storeId: z.number().optional(),
+  employeeId: z.number().optional(),     // Added for adminlogin
+  rememberMe: z.boolean().optional(),    // Added for adminlogin
 }).refine(data => {
-  return (data.email && !data.pin && !data.storeId) || 
-         (!data.email && data.pin && data.storeId);
+  const isAdminLogin = data.email && data.password;
+  const isStoreLogin = data.storeId && data.employeeId;
+
+  return isAdminLogin || isStoreLogin;
 }, {
-  message: "Either email or (pin + storeId) must be provided"
+  message: "Provide either (email + password) or (storeId + employeeId)",
 });
+
 
 export const claimTaskSchema = z.object({
   taskId: z.number(),

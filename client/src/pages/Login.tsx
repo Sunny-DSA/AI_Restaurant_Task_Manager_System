@@ -1,18 +1,13 @@
 "use client";
 
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
+  Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useToast } from "@/hooks/use-toast"; // Adjust path if needed
+import { useToast } from "@/hooks/use-toast";
 import { Store, QrCode, LogIn, Sun, Moon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
@@ -20,9 +15,7 @@ import { QrReader } from "react-qr-reader";
 import axios from "axios";
 
 function ThemeToggle() {
-  const [darkMode, setDarkMode] = useState(
-    () => localStorage.getItem("theme") === "dark"
-  );
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
@@ -50,15 +43,34 @@ export default function LoginPage() {
 
   const [loading, setLoading] = useState(false);
   const [showQRScanner, setShowQRScanner] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+
+  useEffect(() => {
+    const savedEmail = localStorage.getItem("rememberedEmail");
+    const savedTab = localStorage.getItem("rememberedTab");
+
+    if (savedTab === "admin") {
+      setTab("admin");
+      if (savedEmail) setEmail(savedEmail);
+      setRememberMe(true);
+    }
+  }, []);
 
   const handleLogin = async () => {
     setLoading(true);
     try {
       const res = await axios.post("/api/auth/login", { email, password }, {
-        withCredentials: true
+        withCredentials: true,
       });
 
       if (res.data.success) {
+        if (tab === "admin" && rememberMe) {
+          localStorage.setItem("rememberedEmail", email);
+          localStorage.setItem("rememberedTab", "admin");
+        } else {
+          localStorage.removeItem("rememberedEmail");
+          localStorage.removeItem("rememberedTab");
+        }
         setLocation("/");
       } else {
         throw new Error(res.data.message || "Login failed");
@@ -66,7 +78,7 @@ export default function LoginPage() {
     } catch (err: any) {
       toast({
         title: "Login failed",
-        description: err.response?.data?.message || "Invalid email or password.",
+        description: err.response?.data?.message || "Invalid credentials.",
         variant: "destructive",
       });
     } finally {
@@ -78,7 +90,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const res = await axios.post("/api/auth/verify-qr", { qrData: scannedCode }, {
-        withCredentials: true
+        withCredentials: true,
       });
 
       if (res.data.success) {
@@ -101,7 +113,6 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300 px-4 relative">
       <ThemeToggle />
-
       <div className="max-w-md w-full space-y-6">
         {/* Logo & Title */}
         <div className="text-center space-y-2">
@@ -128,35 +139,74 @@ export default function LoginPage() {
               </TabsList>
             </Tabs>
 
-            <div>
-              <Label htmlFor="email">Email Address</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="admin@restaurant.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
+            {tab === "admin" ? (
+              <>
+                <div>
+                  <Label htmlFor="email">Email Address</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="admin@restaurant.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
 
-            <div>
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
+                <div>
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <Label htmlFor="storeId">Store ID</Label>
+                  <Input
+                    id="storeId"
+                    placeholder="Enter Store ID"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="employeeId">Employee ID</Label>
+                  <Input
+                    id="employeeId"
+                    placeholder="Enter Employee ID"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
           </CardContent>
 
           <CardFooter className="flex flex-col space-y-4">
-            <Button
-              onClick={handleLogin}
-              className="w-full"
-              disabled={loading}
-            >
+            {tab === "admin" && (
+              <div className="flex items-center justify-between w-full text-sm">
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="form-checkbox"
+                  />
+                  <span>Remember me</span>
+                </label>
+                <a href="#" className="text-blue-500 hover:underline">
+                  Forgot Password?
+                </a>
+              </div>
+            )}
+
+            <Button onClick={handleLogin} className="w-full" disabled={loading}>
               {loading ? "Logging in..." : (
                 <>
                   <LogIn className="w-4 h-4 mr-2" />
