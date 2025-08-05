@@ -5,7 +5,7 @@ import { storage } from "./storage";
 import { AuthService } from "./services/authService";
 import { StoreService } from "./services/storeService";
 import { TaskService } from "./services/taskService";
-import { requireAuth } from "./middleware/auth";
+import { authenticateToken } from "./middleware/auth";
 import { upload } from "./middleware/upload";
 import bcrypt from "bcrypt";
 
@@ -75,7 +75,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/auth/me", requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.get("/api/auth/me", authenticateToken, (req: AuthenticatedRequest, res: Response) => {
     res.json({
       id: req.user.id,
       email: req.user.email,
@@ -131,7 +131,7 @@ export async function registerRoutes(
   });
 
   // Tasks routes
-  app.get("/api/tasks/my", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  app.get("/api/tasks/my", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const tasks = await TaskService.getUserTasks(req.user.id);
       res.json(tasks);
@@ -140,7 +140,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tasks", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  app.get("/api/tasks", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { storeId, status, assignedTo } = req.query;
       const tasks = await TaskService.getTasks({
@@ -155,7 +155,7 @@ export async function registerRoutes(
   });
 
   // Store routes
-  app.get("/api/stores", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  app.get("/api/stores", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const stores = await storage.getAllStores();
       res.json(stores);
@@ -165,7 +165,7 @@ export async function registerRoutes(
   });
 
   // Users routes  
-  app.get("/api/users", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  app.get("/api/users", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { storeId } = req.query;
       const users = storeId 
@@ -175,93 +175,13 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
 
-    await storage.updateStore(storeId, {
-      qrCode,
-      qrCodeSecret: secret,
-      qrCodeExpiresAt: expiresAt,
-    });
+  // Create HTTP server
+  const server = new Server(app);
 
-    return qrCode;
-  }
-
-  static async verifyQRCode(qrData: string): Promise<{ storeId: number; employeeId?: number; isValid: boolean }> {
-    try {
-      const parsed = JSON.parse(qrData);
-      const { storeId, secret, employeeId } = parsed;
-
-      if (!storeId || !secret || !employeeId) {
-        return { storeId: 0, isValid: false };
-      }
-
-      const store = await storage.getStore(storeId);
-      if (!store || !store.qrCodeSecret || !store.qrCodeExpiresAt) {
-        return { storeId, isValid: false };
-      }
-
-      if (new Date() > store.qrCodeExpiresAt) {
-        return { storeId, isValid: false };
-      }
-
-      const isValid = crypto.timingSafeEqual(
-        Buffer.from(store.qrCodeSecret),
-        Buffer.from(secret)
-      );
-
-      return { storeId, employeeId, isValid };
-    } catch (error) {
-      return { storeId: 0, isValid: false };
-    }
-  }
-
-  static validateGeofence(
-    store: { latitude: string | null; longitude: string | null; geofenceRadius?: number },
-    userLat: number,
-    userLon: number
-  ): { isValid: boolean; distance: number; allowedRadius: number } {
-    const storeLat = parseFloat(store?.latitude ?? "0");
-    const storeLon = parseFloat(store?.longitude ?? "0");
-    const allowedRadius = store?.geofenceRadius ?? 100;
-
-    if (!store.latitude || !store.longitude || isNaN(storeLat) || isNaN(storeLon)) {
-      return { isValid: false, distance: 0, allowedRadius };
-    }
-
-    const distance = this.calculateDistance(storeLat, storeLon, userLat, userLon);
-    const isValid = distance <= allowedRadius;
-
-    return { isValid, distance, allowedRadius };
-  }
-
-  private static calculateDistance(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number
-  ): number {
-    const R = 6371e3;
-    const φ1 = (lat1 * Math.PI) / 180;
-    const φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-
-    const a = Math.sin(Δφ / 2) ** 2 +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) ** 2;
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
-  }
-
-  static async getStoreStats(storeId: number) {
-    const [taskStats, userStats] = await Promise.all([
-      storage.getTaskStats(storeId),
-      storage.getUserStats(storeId),
-    ]);
-
-    return {
-      ...taskStats,
-      ...userStats,
-    };
-  }
+  // TODO: WebSocket setup disabled temporarily to avoid conflicts with Vite WebSocket
+  // Will need to configure on different path when implementing real-time features
+  
+  return server;
 }
