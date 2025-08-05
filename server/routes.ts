@@ -1,84 +1,180 @@
-import { storage } from "./storage";
-import { InsertStore, loginSchema, claimTaskSchema, completeTaskItemSchema, transferTaskSchema, insertStoreSchema, insertTaskTemplateSchema, insertUserSchema, roleEnum, taskStatusEnum } from "@shared/schema";
-import QRCode from "qrcode";
-import crypto from "crypto";
-import express, { type Express, type Request, type Response, type NextFunction } from "express";
+import express, { type Request, type Response } from "express";
 import session from "express-session";
 import { Server } from "http";
-import { WebSocketServer, WebSocket } from "ws";
+import { storage } from "./storage";
 import { AuthService } from "./services/authService";
+import { StoreService } from "./services/storeService";
+import { TaskService } from "./services/taskService";
+import { requireAuth } from "./middleware/auth";
+import { upload } from "./middleware/upload";
+import bcrypt from "bcrypt";
 
-// Types for authenticated requests
+// WebSocket connections map (disabled for now to avoid conflicts)
+const wsConnections = new Map();
+
 interface AuthenticatedRequest extends Request {
-  session: any;
-  user?: {
-    id: number;
-    email?: string | null;
-    firstName?: string | null;
-    lastName?: string | null;
-    role: string;
-    storeId?: number | null;
-  };
+  user?: any;
 }
 
-// Authentication middleware
-const authenticateToken = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const userId = req.session.userId;
+export async function registerRoutes(
+  app: express.Application,
+): Promise<Server> {
   
-  if (!userId) {
-    return res.status(401).json({ message: "Authentication required" });
-  }
-
-  try {
-    const user = await storage.getUser(userId);
-    if (!user || !user.isActive) {
-      return res.status(401).json({ message: "Invalid session" });
+  // Session configuration
+  app.use(session({
+    secret: process.env.SESSION_SECRET || 'your-session-secret-key',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: false, // Set to true in production with HTTPS
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      httpOnly: true
     }
-    
-    req.user = {
-      id: user.id,
-      email: user.email || undefined,
-      firstName: user.firstName || undefined,
-      lastName: user.lastName || undefined,
-      role: user.role,
-      storeId: user.storeId || undefined,
-    };
-    next();
-  } catch (error) {
-    res.status(500).json({ message: "Authentication error" });
-  }
-};
+  }));
 
-export class StoreService {
-  static async createStore(storeData: InsertStore) {
-    const store = await storage.createStore(storeData);
+  // Authentication routes
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const { email, password, pin, storeId } = req.body;
 
-    // Generate QR code for the new store
-    await this.generateQRCode(store.id);
+      let user;
+      if (email && password) {
+        // Admin/manager login with email
+        user = await AuthService.authenticateWithEmail(email, password);
+      } else if (pin && storeId) {
+        // Employee login with PIN
+        user = await AuthService.authenticateWithPin(pin, storeId);
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid login credentials provided"
+        });
+      }
 
-    return store;
-  }
+      // Set session
+      req.session.userId = user.id;
+      req.session.user = user;
 
-  static async generateQRCode(storeId: number) {
-    const store = await storage.getStore(storeId);
-    if (!store) {
-      throw new Error("Store not found");
+      res.json({
+        success: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          role: user.role,
+          storeId: user.storeId
+        }
+      });
+    } catch (error: any) {
+      console.error('Login error:', error);
+      res.status(401).json({
+        success: false,
+        message: error.message || "Invalid email or password"
+      });
     }
+  });
 
-    const secret = crypto.randomBytes(32).toString("hex");
+  app.get("/api/auth/me", requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    res.json({
+      id: req.user.id,
+      email: req.user.email,
+      firstName: req.user.firstName,
+      lastName: req.user.lastName,
+      role: req.user.role,
+      storeId: req.user.storeId
+    });
+  });
 
-    const qrData = {
-      storeId: store.id,
-      employeeId: store.id, // Assuming employeeId = storeId temporarily
-      secret,
-      version: 1,
-    };
+  app.post("/api/auth/logout", (req: AuthenticatedRequest, res) => {
+    req.session.destroy((err: any) => {
+      if (err) {
+        return res.status(500).json({ message: "Could not log out" });
+      }
+      res.json({ message: "Logged out successfully" });
+    });
+  });
 
-    const qrCodeData = JSON.stringify(qrData);
-    const qrCode = await QRCode.toDataURL(qrCodeData);
+  // QR code verification route
+  app.post("/api/auth/verify-qr", async (req: Request, res: Response) => {
+    try {
+      const { qrData, latitude, longitude } = req.body;
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
+      if (!qrData) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "QR data is required" 
+        });
+      }
+
+      const verification = await StoreService.verifyQRCode(qrData);
+      
+      if (!verification.isValid) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Invalid or expired QR code" 
+        });
+      }
+
+      res.json({
+        success: true,
+        storeId: verification.storeId,
+        employeeId: verification.employeeId,
+      });
+    } catch (error) {
+      console.error('QR verification error:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: "QR verification failed" 
+      });
+    }
+  });
+
+  // Tasks routes
+  app.get("/api/tasks/my", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const tasks = await TaskService.getUserTasks(req.user.id);
+      res.json(tasks);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/tasks", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { storeId, status, assignedTo } = req.query;
+      const tasks = await TaskService.getTasks({
+        storeId: storeId ? Number(storeId) : undefined,
+        status: status as string,
+        assignedTo: assignedTo ? Number(assignedTo) : undefined
+      });
+      res.json(tasks);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Store routes
+  app.get("/api/stores", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const stores = await storage.getAllStores();
+      res.json(stores);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Users routes  
+  app.get("/api/users", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { storeId } = req.query;
+      const users = storeId 
+        ? await storage.getUsersByStore(Number(storeId))
+        : await storage.getActiveUsers();
+      res.json(users);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
 
     await storage.updateStore(storeId, {
       qrCode,
@@ -123,15 +219,15 @@ export class StoreService {
     userLat: number,
     userLon: number
   ): { isValid: boolean; distance: number; allowedRadius: number } {
-    if (!store.latitude || !store.longitude) {
-      return { isValid: false, distance: 0, allowedRadius: store.geofenceRadius || 100 };
+    const storeLat = parseFloat(store?.latitude ?? "0");
+    const storeLon = parseFloat(store?.longitude ?? "0");
+    const allowedRadius = store?.geofenceRadius ?? 100;
+
+    if (!store.latitude || !store.longitude || isNaN(storeLat) || isNaN(storeLon)) {
+      return { isValid: false, distance: 0, allowedRadius };
     }
 
-    const storeLat = parseFloat(store.latitude);
-    const storeLon = parseFloat(store.longitude);
-
     const distance = this.calculateDistance(storeLat, storeLon, userLat, userLon);
-    const allowedRadius = store.geofenceRadius || 100;
     const isValid = distance <= allowedRadius;
 
     return { isValid, distance, allowedRadius };
@@ -168,146 +264,4 @@ export class StoreService {
       ...userStats,
     };
   }
-}
-
-// WebSocket connections map
-const wsConnections = new Map<number, WebSocket>(); // userId -> WebSocket
-
-export async function registerRoutes(app: Express): Promise<Server> {
-  // Session configuration
-  app.use(session({
-    secret: process.env.SESSION_SECRET || "dev-secret-change-in-production",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    },
-  }));
-
-  // Authentication routes
-  app.post("/api/auth/login", async (req: AuthenticatedRequest, res) => {
-    try {
-      const validatedData = loginSchema.parse(req.body);
-      let user;
-
-      if (validatedData.email) {
-        // Admin login with email/password
-        const { email, password } = req.body;
-
-        if (!email || !password) {
-          return res.status(400).json({ 
-            success: false,
-            message: "Email and password are required" 
-          });
-        }
-
-        user = await AuthService.authenticateWithEmail(email, password);
-      } else if (validatedData.pin && validatedData.storeId) {
-        // Store employee login with PIN
-        user = await AuthService.authenticateWithPin(validatedData.pin, validatedData.storeId);
-      } else {
-        return res.status(400).json({ 
-          success: false,
-          message: "Invalid login data" 
-        });
-      }
-
-      // Store user ID in session
-      req.session.userId = user.id;
-
-      res.json({
-        success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          storeId: user.storeId,
-        }
-      });
-    } catch (error: any) {
-      console.error('Login error:', error);
-
-      // Handle specific authentication errors
-      if (error.message.includes('Invalid') || error.message.includes('credentials')) {
-        return res.status(401).json({ 
-          success: false,
-          message: "Invalid email or password" 
-        });
-      }
-
-      // Handle validation errors
-      if (error.name === 'ZodError') {
-        return res.status(400).json({ 
-          success: false,
-          message: "Please check your input and try again" 
-        });
-      }
-
-      // Generic error for unexpected issues
-      res.status(500).json({ 
-        success: false,
-        message: "Server error. Please try again later." 
-      });
-    }
-  });
-
-  app.post("/api/auth/logout", (req: AuthenticatedRequest, res) => {
-    req.session.destroy((err: any) => {
-      if (err) {
-        return res.status(500).json({ message: "Could not log out" });
-      }
-      res.json({ message: "Logged out successfully" });
-    });
-  });
-
-  app.get("/api/auth/me", authenticateToken, (req: AuthenticatedRequest, res) => {
-    res.json(req.user);
-  });
-
-  // QR Code verification and check-in
-  app.post("/api/auth/verify-qr", async (req, res) => {
-    try {
-      const { qrData, latitude, longitude } = req.body;
-      
-      if (!qrData) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "QR code data is required" 
-        });
-      }
-
-      const verification = await StoreService.verifyQRCode(qrData);
-      
-      if (!verification.isValid) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "Invalid or expired QR code" 
-        });
-      }
-
-      res.json({
-        success: true,
-        storeId: verification.storeId,
-        employeeId: verification.employeeId,
-      });
-    } catch (error) {
-      console.error('QR verification error:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: "QR verification failed" 
-      });
-    }
-  });
-
-  // Create HTTP server
-  const server = new Server(app);
-
-  // TODO: WebSocket setup disabled temporarily to avoid conflicts with Vite WebSocket
-  // Will need to configure on different path when implementing real-time features
-  
-  return server;
 }
