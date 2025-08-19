@@ -206,6 +206,21 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/tasks/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const deleted = await storage.deleteTask(id);
+      if (deleted) {
+        res.json({ message: "Task deleted successfully" });
+      } else {
+        res.status(404).json({ message: "Task not found" });
+      }
+    } catch (error: any) {
+      console.error("Error deleting task:", error);
+      res.status(500).json({ message: error.message || "Failed to delete task" });
+    }
+  });
+
   app.post("/api/tasks/:id/claim", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const taskId = Number(req.params.id);

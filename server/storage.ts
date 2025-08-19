@@ -79,6 +79,7 @@ export interface IStorage {
   }): Promise<any[]>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: number, updates: Partial<Task>): Promise<Task>;
+  deleteTask(id: number): Promise<boolean>;
   claimTask(taskId: number, userId: number): Promise<Task>;
   transferTask(taskId: number, fromUserId: number, toUserId: number, reason?: string): Promise<TaskTransfer>;
   
@@ -456,6 +457,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(tasks.id, id))
       .returning();
     return task;
+  }
+
+  async deleteTask(id: number): Promise<boolean> {
+    const result = await db
+      .delete(tasks)
+      .where(eq(tasks.id, id))
+      .returning();
+    return result.length > 0;
   }
 
   async claimTask(taskId: number, userId: number): Promise<Task> {

@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Clock, User, Camera, List, UserCheck, ArrowRightLeft, CheckCircle } from "lucide-react";
+import TaskDetailsDialog from "./TaskDetailsDialog";
 
 interface Task {
   id: number;
@@ -19,6 +20,7 @@ interface Task {
   status: string;
   priority: string;
   assigneeType: string;
+  assigneeId?: number;
   claimedBy?: number;
   completedBy?: number;
   dueAt?: string;
@@ -29,6 +31,9 @@ interface Task {
   photosUploaded: number;
   estimatedDuration?: number;
   actualDuration?: number;
+  storeId?: number;
+  completionNotes?: string;
+  claimedAt?: string;
 }
 
 interface TaskCardProps {
@@ -38,6 +43,7 @@ interface TaskCardProps {
 
 export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [transferUserId, setTransferUserId] = useState<string>("");
   const [transferReason, setTransferReason] = useState("");
   const { user } = useAuth();
@@ -319,7 +325,12 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
               </Button>
             )}
 
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => setShowDetailsDialog(true)}
+              data-testid="button-view-details"
+            >
               View Details
             </Button>
           </div>
@@ -392,6 +403,14 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Task Details Dialog */}
+      <TaskDetailsDialog
+        task={task}
+        isOpen={showDetailsDialog}
+        onClose={() => setShowDetailsDialog(false)}
+        onTaskUpdate={onTaskUpdate}
+      />
     </>
   );
 }

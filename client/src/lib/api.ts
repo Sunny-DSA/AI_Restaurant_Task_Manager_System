@@ -117,6 +117,15 @@ export const taskApi = {
     return response.json();
   },
 
+  async updateTask(taskId: number, taskData: any): Promise<Task> {
+    const response = await apiRequest("PUT", `/api/tasks/${taskId}`, taskData);
+    return response.json();
+  },
+
+  async deleteTask(taskId: number): Promise<void> {
+    await apiRequest("DELETE", `/api/tasks/${taskId}`);
+  },
+
   async uploadPhoto(taskId: number, file: File, location?: { latitude: number; longitude: number }, taskItemId?: number): Promise<any> {
     const formData = new FormData();
     formData.append("photo", file);
