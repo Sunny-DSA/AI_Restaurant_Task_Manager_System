@@ -22,7 +22,7 @@ export function hasPermission(userRole: string, action: string, module: string):
       reports: ["read", "export"],
     },
     admin: {
-      stores: ["read", "update"],
+      stores: ["create","read", "update"],
       users: ["create", "read", "update"],
       tasks: ["create", "read", "update", "assign"],
       templates: ["create", "read", "update"],

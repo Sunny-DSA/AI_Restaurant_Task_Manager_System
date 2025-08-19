@@ -6,7 +6,7 @@ import { canAccessPage } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Bell, Home, CheckSquare, List, Store, Users, BarChart3, Menu, X } from "lucide-react";
+import { Bell, Home, CheckSquare, List, Store, Users, BarChart3 } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 interface LayoutProps {
@@ -97,7 +97,7 @@ export default function Layout({ children }: LayoutProps) {
               </div>
             </div>
           </div>
-          
+
           <nav className="mt-8 flex-1 px-4 space-y-2">
             {filteredNavigation.map((item) => {
               const isActive = location === item.href;
@@ -116,7 +116,7 @@ export default function Layout({ children }: LayoutProps) {
             })}
           </nav>
         </div>
-        
+
         <div className="flex-shrink-0 flex border-t border-gray-200 p-4">
           <div className="flex items-center w-full">
             <Avatar className="h-10 w-10">
@@ -124,11 +124,13 @@ export default function Layout({ children }: LayoutProps) {
             </Avatar>
             <div className="ml-3 flex-1">
               <p className="text-sm font-medium text-gray-900">
-                {user.firstName} {user.lastName}
+                {user.firstName || ""} {user.lastName || ""}
               </p>
-              <Badge variant="secondary" className={`text-xs ${getRoleColor()}`}>
-                {user.role.replace("_", " ")}
-              </Badge>
+              {user?.role && (
+                <Badge variant="secondary" className={`text-xs ${getRoleColor()}`}>
+                  {user.role.replace("_", " ")}
+                </Badge>
+              )}
             </div>
             <Button
               variant="ghost"
@@ -149,10 +151,7 @@ export default function Layout({ children }: LayoutProps) {
   return (
     <div className="min-h-screen bg-gray-50">
       <DesktopSidebar />
-      
-      {/* Main content */}
       <div className="md:pl-64 flex flex-col min-h-screen">
-        {/* Top header */}
         <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-40">
           <div className="px-4 py-4 md:px-6">
             <div className="flex items-center justify-between">
@@ -165,22 +164,16 @@ export default function Layout({ children }: LayoutProps) {
                   Welcome back, {user.firstName || "User"}
                 </p>
               </div>
-              
               <div className="flex items-center space-x-4">
-                {/* Connection status indicator */}
                 <div className={`w-2 h-2 rounded-full ${
                   isConnected ? "bg-green-500" : "bg-red-500"
                 }`} title={isConnected ? "Connected" : "Disconnected"} />
-                
-                {/* Notifications */}
                 <Button variant="ghost" size="sm" className="relative">
                   <Bell className="h-5 w-5" />
                   <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
                     3
                   </span>
                 </Button>
-                
-                {/* Mobile user info */}
                 <div className="md:hidden">
                   <Avatar className="h-8 w-8">
                     <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
@@ -190,14 +183,10 @@ export default function Layout({ children }: LayoutProps) {
             </div>
           </div>
         </header>
-        
-        {/* Page content */}
         <main className="flex-1 pb-20 md:pb-0">
           {children}
         </main>
       </div>
-      
-      {/* Mobile navigation */}
       {isMobile && <MobileNavigation />}
     </div>
   );

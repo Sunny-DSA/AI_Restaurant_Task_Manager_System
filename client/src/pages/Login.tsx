@@ -13,7 +13,7 @@ import { Store, QrCode, LogIn, Sun, Moon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { QrReader } from "react-qr-reader";
-import axios from "axios";
+
 
 function ThemeToggle() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
@@ -43,8 +43,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [tab, setTab] = useState("admin");
 
-  const [showQRScanner, setShowQRScanner] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showQRScanner, setShowQRScanner] = useState(false);
 
   useEffect(() => {
     const savedEmail = localStorage.getItem("rememberedEmail");
@@ -60,8 +61,7 @@ export default function LoginPage() {
   const handleLogin = async () => {
     try {
       await login({ email, password });
-      
-      // Handle remember me functionality
+
       if (tab === "admin" && rememberMe) {
         localStorage.setItem("rememberedEmail", email);
         localStorage.setItem("rememberedTab", "admin");
@@ -69,10 +69,8 @@ export default function LoginPage() {
         localStorage.removeItem("rememberedEmail");
         localStorage.removeItem("rememberedTab");
       }
-      
-      // Navigation will happen automatically due to authentication state change
+
     } catch (err: any) {
-      // Error handling is already done in the useAuth hook
       console.log("Login error:", err);
     }
   };
@@ -80,7 +78,6 @@ export default function LoginPage() {
   const handleQRLogin = async (scannedCode: string) => {
     try {
       await verifyQR({ qrData: scannedCode });
-      // Navigation will happen automatically due to authentication state change
     } catch (err: any) {
       toast({
         title: "QR Login Failed",
@@ -96,7 +93,6 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300 px-4 relative">
       <ThemeToggle />
       <div className="max-w-md w-full space-y-6">
-        {/* Logo & Title */}
         <div className="text-center space-y-2">
           <div className="w-16 h-16 mx-auto bg-primary-600 rounded-xl flex items-center justify-center shadow-lg">
             <Store className="text-white w-8 h-8" />
@@ -113,117 +109,151 @@ export default function LoginPage() {
             <CardDescription>Login to manage restaurant operations</CardDescription>
           </CardHeader>
 
-          <CardContent className="space-y-4">
-            <Tabs value={tab} onValueChange={setTab}>
-              <TabsList className="grid w-full grid-cols-2 bg-gray-100 dark:bg-gray-700">
-                <TabsTrigger value="store">Store Login</TabsTrigger>
-                <TabsTrigger value="admin">Admin Login</TabsTrigger>
-              </TabsList>
-            </Tabs>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            handleLogin();
+          }}>
+            <CardContent className="space-y-4">
+              <Tabs value={tab} onValueChange={setTab}>
+                <TabsList className="grid w-full grid-cols-2 bg-gray-100 dark:bg-gray-700">
+                  <TabsTrigger value="store">Store Login</TabsTrigger>
+                  <TabsTrigger value="admin">Admin Login</TabsTrigger>
+                </TabsList>
+              </Tabs>
 
-            {tab === "admin" ? (
-              <>
-                <div>
-                  <Label htmlFor="email">Email Address</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="admin@restaurant.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <Label htmlFor="storeId">Store ID</Label>
-                  <Input
-                    id="storeId"
-                    placeholder="Enter Store ID"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="employeeId">Employee ID</Label>
-                  <Input
-                    id="employeeId"
-                    placeholder="Enter Employee ID"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-              </>
-            )}
-          </CardContent>
-
-          <CardFooter className="flex flex-col space-y-4">
-            {tab === "admin" && (
-              <div className="flex items-center justify-between w-full text-sm">
-                <label className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="form-checkbox"
-                  />
-                  <span>Remember me</span>
-                </label>
-                <a href="#" className="text-blue-500 hover:underline">
-                  Forgot Password?
-                </a>
-              </div>
-            )}
-
-            <Button onClick={handleLogin} className="w-full" disabled={isLoggingIn}>
-              {isLoggingIn ? "Logging in..." : (
+              {tab === "admin" ? (
                 <>
-                  <LogIn className="w-4 h-4 mr-2" />
-                  Login as {tab === "admin" ? "Admin" : "Store"}
-                </>
-              )}
-            </Button>
-
-            {tab === "store" && (
-              <>
-                <Button
-                  onClick={() => setShowQRScanner(true)}
-                  className="w-full"
-                  variant="outline"
-                >
-                  <QrCode className="w-5 h-5 mr-2" />
-                  Scan Store QR Code
-                </Button>
-
-                {showQRScanner && (
-                  <div className="mt-4 border rounded-md overflow-hidden">
-                    <QrReader
-                      constraints={{ facingMode: "environment" }}
-                      onResult={(result) => {
-                        if (!!result) {
-                          handleQRLogin(result.getText());
-                        }
-                      }}
-                      containerStyle={{ width: "100%" }}
+                  <div>
+                    <Label htmlFor="email">Email Address</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="admin@restaurant.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
                     />
                   </div>
+
+                  <div>
+                    <Label htmlFor="password">Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="password"
+                        type={showPassword ? "text" : "password"}
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 text-sm text-gray-500 hover:text-gray-700"
+                      >
+                        {showPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <Label htmlFor="storeId">Store ID</Label>
+                    <Input
+                      id="storeId"
+                      placeholder="Enter Store ID"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="employeeId">Employee ID</Label>
+                    <Input
+                      id="employeeId"
+                      placeholder="Enter Employee ID"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
+            </CardContent>
+
+            <CardFooter className="flex flex-col space-y-4">
+              {tab === "admin" && (
+                <div className="flex items-center justify-between w-full text-sm">
+                  <label className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={rememberMe}
+                      onChange={(e) => setRememberMe(e.target.checked)}
+                      className="form-checkbox"
+                    />
+                    <span>Remember me</span>
+                  </label>
+                  <a href="#" className="text-blue-500 hover:underline">
+                    Forgot Password?
+                  </a>
+                </div>
+              )}
+
+              <Button type="submit" className="w-full" disabled={isLoggingIn}>
+                {isLoggingIn ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4 mr-2 text-white" viewBox="0 0 24 24">
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v4l3.5-3.5L12 0v4a8 8 0 010 16v4l3.5-3.5L12 20v-4a8 8 0 01-8-8z"
+                      ></path>
+                    </svg>
+                    Logging in...
+                  </>
+                ) : (
+                  <>
+                    <LogIn className="w-4 h-4 mr-2" />
+                    Login as {tab === "admin" ? "Admin" : "Store"}
+                  </>
                 )}
-              </>
-            )}
-          </CardFooter>
+              </Button>
+
+              {tab === "store" && (
+                <>
+                  <Button
+                    onClick={() => setShowQRScanner(true)}
+                    className="w-full"
+                    variant="outline"
+                    type="button"
+                  >
+                    <QrCode className="w-5 h-5 mr-2" />
+                    Scan Store QR Code
+                  </Button>
+
+                  {showQRScanner && (
+                    <div className="mt-4 border rounded-md overflow-hidden">
+                      <QrReader
+                        constraints={{ facingMode: "environment" }}
+                        onResult={(result) => {
+                          if (!!result) {
+                            handleQRLogin(result.getText());
+                          }
+                        }}
+                        containerStyle={{ width: "100%" }}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+            </CardFooter>
+          </form>
         </Card>
       </div>
     </div>

@@ -7,26 +7,37 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { 
-  Users as UsersIcon, 
-  UserCheck, 
-  Watch, 
-  UserPlus, 
-  Search, 
+import {
+  Users as UsersIcon,
+  UserCheck,
+  Watch,
+  UserPlus,
+  Search,
   Mail,
   Upload,
   Plus,
   MoreHorizontal,
   Shield,
-  Key
+  Key,
 } from "lucide-react";
 
 const userSchema = z.object({
@@ -35,7 +46,10 @@ const userSchema = z.object({
   lastName: z.string().min(1, "Last name is required"),
   role: z.enum(["master_admin", "admin", "store_manager", "employee"]),
   storeId: z.number().optional(),
-  password: z.string().min(6, "Password must be at least 6 characters").optional(),
+  password: z
+    .string()
+    .min(6, "Password must be at least 6 characters")
+    .optional(),
 });
 
 type UserFormData = z.infer<typeof userSchema>;
@@ -49,12 +63,14 @@ export default function Users() {
   const [roleFilter, setRoleFilter] = useState("all");
 
   const canManageUsers = hasPermission(user?.role || "", "create", "users");
-  const canViewAllUsers = user?.role === "master_admin" || user?.role === "admin";
+  const canViewAllUsers =
+    user?.role === "master_admin" || user?.role === "admin";
 
   // Get users
   const { data: users = [] } = useQuery({
     queryKey: ["/api/users", user?.storeId],
-    queryFn: () => userApi.getUsers(canViewAllUsers ? undefined : user?.storeId),
+    queryFn: () =>
+      userApi.getUsers(canViewAllUsers ? undefined : user?.storeId),
     enabled: canManageUsers,
   });
 
@@ -112,7 +128,10 @@ export default function Users() {
     // Only include password for admin roles
     const submitData = {
       ...data,
-      password: (data.role === "master_admin" || data.role === "admin") ? data.password : undefined,
+      password:
+        data.role === "master_admin" || data.role === "admin"
+          ? data.password
+          : undefined,
     };
     createUserMutation.mutate(submitData);
   };
@@ -122,14 +141,17 @@ export default function Users() {
 
     // Apply role filter
     if (roleFilter !== "all") {
-      filteredUsers = filteredUsers.filter(u => u.role === roleFilter);
+      filteredUsers = filteredUsers.filter((u) => u.role === roleFilter);
     }
 
     // Apply search filter
     if (searchTerm) {
-      filteredUsers = filteredUsers.filter(u =>
-        `${u.firstName} ${u.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (u.email && u.email.toLowerCase().includes(searchTerm.toLowerCase()))
+      filteredUsers = filteredUsers.filter(
+        (u) =>
+          `${u.firstName} ${u.lastName}`
+            .toLowerCase()
+            .includes(searchTerm.toLowerCase()) ||
+          (u.email && u.email.toLowerCase().includes(searchTerm.toLowerCase())),
       );
     }
 
@@ -144,8 +166,8 @@ export default function Users() {
 
   const getUserStats = () => {
     const totalUsers = users.length;
-    const activeUsers = users.filter(u => u.isActive).length;
-    const recentUsers = users.filter(u => {
+    const activeUsers = users.filter((u) => u.isActive).length;
+    const recentUsers = users.filter((u) => {
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
       return new Date(u.createdAt) > weekAgo;
@@ -162,9 +184,12 @@ export default function Users() {
         <Card>
           <CardContent className="p-12 text-center">
             <Shield className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Access Restricted</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Access Restricted
+            </h3>
             <p className="text-gray-600">
-              You don't have permission to manage users. Contact your administrator if you need access.
+              You don't have permission to manage users. Contact your
+              administrator if you need access.
             </p>
           </CardContent>
         </Card>
@@ -181,7 +206,9 @@ export default function Users() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Users</p>
-                <p className="text-2xl font-bold text-gray-900">{stats.totalUsers}</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {stats.totalUsers}
+                </p>
               </div>
               <UsersIcon className="w-8 h-8 text-primary-600" />
             </div>
@@ -192,8 +219,12 @@ export default function Users() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Active Users</p>
-                <p className="text-2xl font-bold text-success-600">{stats.activeUsers}</p>
+                <p className="text-sm font-medium text-gray-600">
+                  Active Users
+                </p>
+                <p className="text-2xl font-bold text-success-600">
+                  {stats.activeUsers}
+                </p>
               </div>
               <UserCheck className="w-8 h-8 text-success-600" />
             </div>
@@ -204,7 +235,9 @@ export default function Users() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Pending Invites</p>
+                <p className="text-sm font-medium text-gray-600">
+                  Pending Invites
+                </p>
                 <p className="text-2xl font-bold text-warning-600">0</p>
               </div>
               <Watch className="w-8 h-8 text-warning-600" />
@@ -216,8 +249,12 @@ export default function Users() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">New This Week</p>
-                <p className="text-2xl font-bold text-primary-600">{stats.recentUsers}</p>
+                <p className="text-sm font-medium text-gray-600">
+                  New This Week
+                </p>
+                <p className="text-2xl font-bold text-primary-600">
+                  {stats.recentUsers}
+                </p>
               </div>
               <UserPlus className="w-8 h-8 text-primary-600" />
             </div>
@@ -243,7 +280,7 @@ export default function Users() {
                 Bulk Import
               </Button>
             </div>
-            
+
             <div className="flex items-center space-x-3">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
@@ -283,11 +320,21 @@ export default function Users() {
               <table className="w-full">
                 <thead className="border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Active</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      User
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Role
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Last Active
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -296,14 +343,18 @@ export default function Users() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
                           <Avatar className="h-10 w-10 mr-4">
-                            <AvatarFallback>{getUserInitials(userItem)}</AvatarFallback>
+                            <AvatarFallback>
+                              {getUserInitials(userItem)}
+                            </AvatarFallback>
                           </Avatar>
                           <div>
                             <div className="text-sm font-medium text-gray-900">
                               {userItem.firstName} {userItem.lastName}
                             </div>
                             {userItem.email && (
-                              <div className="text-sm text-gray-500">{userItem.email}</div>
+                              <div className="text-sm text-gray-500">
+                                {userItem.email}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -315,29 +366,37 @@ export default function Users() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <div className={`w-2 h-2 rounded-full mr-2 ${
-                            userItem.isActive ? "bg-success-500" : "bg-gray-400"
-                          }`} />
-                          <span className={`text-sm ${
-                            userItem.isActive ? "text-success-600" : "text-gray-500"
-                          }`}>
+                          <div
+                            className={`w-2 h-2 rounded-full mr-2 ${
+                              userItem.isActive
+                                ? "bg-success-500"
+                                : "bg-gray-400"
+                            }`}
+                          />
+                          <span
+                            className={`text-sm ${
+                              userItem.isActive
+                                ? "text-success-600"
+                                : "text-gray-500"
+                            }`}
+                          >
                             {userItem.isActive ? "Active" : "Inactive"}
                           </span>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {userItem.lastLogin 
+                        {userItem.lastLogin
                           ? new Date(userItem.lastLogin).toLocaleDateString()
-                          : "Never"
-                        }
+                          : "Never"}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                         <Button variant="ghost" size="sm">
                           Edit
                         </Button>
-                        {(userItem.role === "store_manager" || userItem.role === "employee") && (
-                          <Button 
-                            variant="ghost" 
+                        {(userItem.role === "store_manager" ||
+                          userItem.role === "employee") && (
+                          <Button
+                            variant="ghost"
                             size="sm"
                             onClick={() => resetPinMutation.mutate(userItem.id)}
                             disabled={resetPinMutation.isPending}
@@ -346,7 +405,11 @@ export default function Users() {
                             Reset PIN
                           </Button>
                         )}
-                        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                        >
                           Disable
                         </Button>
                       </td>
@@ -359,13 +422,14 @@ export default function Users() {
             <div className="text-center py-12">
               <UsersIcon className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                {searchTerm || roleFilter !== "all" ? "No users found" : "No users yet"}
+                {searchTerm || roleFilter !== "all"
+                  ? "No users found"
+                  : "No users yet"}
               </h3>
               <p className="text-gray-600 mb-6">
-                {searchTerm || roleFilter !== "all" 
+                {searchTerm || roleFilter !== "all"
                   ? "Try adjusting your search or filters"
-                  : "Get started by adding your first team member"
-                }
+                  : "Get started by adding your first team member"}
               </p>
               {!searchTerm && roleFilter === "all" && (
                 <Button onClick={() => setShowCreateModal(true)}>
@@ -453,7 +517,8 @@ export default function Users() {
               )}
             </div>
 
-            {(form.watch("role") === "master_admin" || form.watch("role") === "admin") && (
+            {(form.watch("role") === "master_admin" ||
+              form.watch("role") === "admin") && (
               <div>
                 <Label htmlFor="password">Password</Label>
                 <Input
@@ -473,10 +538,10 @@ export default function Users() {
 
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
               <p className="text-sm text-blue-800">
-                {form.watch("role") === "store_manager" || form.watch("role") === "employee"
+                {form.watch("role") === "store_manager" ||
+                form.watch("role") === "employee"
                   ? "A 4-digit PIN will be automatically generated for store access"
-                  : "This user will receive email login credentials"
-                }
+                  : "This user will receive email login credentials"}
               </p>
             </div>
 

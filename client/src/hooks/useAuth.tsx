@@ -50,24 +50,41 @@ export function useAuth() {
   });
 
   const loginMutation = useMutation({
-    mutationFn: async (loginData: LoginData) => {
+    mutationFn: async (loginData: LoginData): Promise<{ success: boolean, user: User }> => {
       const response = await apiRequest("POST", "/api/auth/login", loginData);
       return response.json();
     },
-    onSuccess: (user) => {
-      queryClient.setQueryData(["/api/auth/me"], user);
+
+    onSuccess: (response) => {
+      const loggedInUser = response.user;
+      queryClient.setQueryData(["/api/auth/me"], loggedInUser);
       toast({
         title: "Welcome back!",
-        description: `Logged in as ${user.firstName} ${user.lastName}`,
+        description: `Logged in as ${loggedInUser.firstName} ${loggedInUser.lastName}`,
       });
     },
-    onError: (error: Error) => {
+
+    onError: (error: any) => {
+      const fallbackMessage = "An unexpected error occurred. Please try again.";
+      let message = fallbackMessage;
+
+      try {
+        // Try parsing server error message if available
+        const response = JSON.parse(error.message);
+        message = response?.message || fallbackMessage;
+      } catch {
+        if (error.message.includes("401")) {
+          message = "Invalid email or password. Please check your credentials.";
+        }
+      }
+
       toast({
         title: "Login failed",
-        description: error.message,
+        description: message,
         variant: "destructive",
       });
-    },
+    }
+,
   });
 
   const logoutMutation = useMutation({
