@@ -71,7 +71,7 @@ export default function LoginPage() {
       }
 
     } catch (err: any) {
-      console.log("Login error:", err);
+      // Error is handled by the mutation's onError callback
     }
   };
 

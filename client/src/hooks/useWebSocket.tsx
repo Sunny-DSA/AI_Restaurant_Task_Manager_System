@@ -44,7 +44,7 @@ export function useWebSocket() {
           
           switch (message.type) {
             case "auth_success":
-              console.log("WebSocket authenticated successfully");
+              // WebSocket authenticated successfully
               break;
               
             case "task_update":
@@ -84,10 +84,10 @@ export function useWebSocket() {
               break;
               
             default:
-              console.log("Unknown WebSocket message type:", message.type);
+              // Unknown message type, silently ignore in production
           }
         } catch (error) {
-          console.error("Error parsing WebSocket message:", error);
+          // Error parsing WebSocket message, silently handle in production
         }
       };
 
@@ -104,11 +104,11 @@ export function useWebSocket() {
       };
 
       ws.onerror = (error) => {
-        console.error("WebSocket error:", error);
+        // WebSocket error occurred, silently handle in production
         setIsConnected(false);
       };
     } catch (error) {
-      console.error("Failed to create WebSocket connection:", error);
+      // Failed to create WebSocket connection, silently handle in production
     }
   };
 

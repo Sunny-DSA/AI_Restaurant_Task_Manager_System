@@ -91,7 +91,7 @@ export default function Users() {
     onSuccess: (newUser) => {
       toast({
         title: "User created successfully",
-        description: `${newUser.firstName} ${newUser.lastName} has been added${newUser.pin ? ` with PIN: ${newUser.pin}` : ""}`,
+        description: `${newUser.firstName} ${newUser.lastName} has been added`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       setShowCreateModal(false);
