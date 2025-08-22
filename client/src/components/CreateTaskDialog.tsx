@@ -93,9 +93,9 @@ export default function CreateTaskDialog({ isOpen, onClose, templateId }: Create
         title: "Task created successfully",
         description: "The task has been created and is now available for assignment.",
       });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["myTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["availableTasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks/my"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks/available"] });
       onClose();
       form.reset();
     },

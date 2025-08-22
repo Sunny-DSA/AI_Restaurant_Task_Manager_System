@@ -89,8 +89,9 @@ export const taskApi = {
     return response.json();
   },
 
-  async getAvailableTasks(): Promise<Task[]> {
-    const response = await apiRequest("GET", "/api/tasks/available");
+  async getAvailableTasks(storeId?: number): Promise<Task[]> {
+    const params = storeId ? `?storeId=${storeId}` : "";
+    const response = await apiRequest("GET", `/api/tasks/available${params}`);
     return response.json();
   },
 

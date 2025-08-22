@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, Plus, Filter } from "lucide-react";
 
-import { taskApi, userApi, storeApi, Task, User } from "@/lib/api";
+import { taskApi, userApi, Task, User } from "@/lib/api";
 import TaskCard from "../components/TaskCard";
 import CreateTaskDialog from "../components/CreateTaskDialog";
 import { useAuth } from "../hooks/useAuth";
@@ -23,10 +23,7 @@ const Button: React.FC<ButtonProps> = ({
   disabled = false,
 }) => {
   const baseClasses = "px-4 py-2 rounded-lg transition-colors font-medium";
-  const variantClasses: Record<
-    "default" | "outline" | "ghost" | "primary",
-    string
-  > = {
+  const variantClasses: Record<ButtonProps["variant"], string> = {
     default: "bg-blue-600 text-white hover:bg-blue-700",
     outline: "border border-gray-300 text-gray-600 hover:bg-gray-50",
     ghost: "text-gray-600 hover:bg-gray-100",
@@ -83,26 +80,30 @@ export default function Tasks() {
   const [activeFilter, setActiveFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-
   const [selectedEmployee, setSelectedEmployee] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
-  // --- API Queries (TanStack Query v5 syntax) ---
+  // --- API Queries ---
   const { data: allTasks = [], refetch: refetchTasks } = useQuery<Task[]>({
     queryKey: ["tasks", user?.storeId],
-    queryFn: () => taskApi.getTasks({ storeId: user?.storeId }),
-    enabled: !!user?.storeId,
-  });
-
-  const { data: myTasks = [] } = useQuery<Task[]>({
-    queryKey: ["myTasks"],
-    queryFn: () => taskApi.getMyTasks(),
+    queryFn: () =>
+      user?.role === "admin" ||
+      user?.role === "master_admin" ||
+      user?.role === "store_manager"
+        ? taskApi.getTasks({ storeId: user?.storeId }) // admin/manager → all store tasks
+        : taskApi.getMyTasks(), // employees → only their tasks
+    enabled: !!user,
   });
 
   const { data: availableTasks = [] } = useQuery<Task[]>({
-    queryKey: ["availableTasks"],
+    queryKey: ["availableTasks", user?.storeId],
     queryFn: () => taskApi.getAvailableTasks(),
+    enabled:
+      !!user &&
+      (user.role === "admin" ||
+        user.role === "master_admin" ||
+        user.role === "store_manager"),
   });
 
   const { data: employees = [] } = useQuery<User[]>({
@@ -116,9 +117,6 @@ export default function Tasks() {
     let tasks: Task[] = [];
 
     switch (activeFilter) {
-      case "my":
-        tasks = myTasks;
-        break;
       case "available":
         tasks = availableTasks;
         break;
@@ -163,28 +161,8 @@ export default function Tasks() {
 
   const filteredTasks = getFilteredTasks();
 
-  const getFilterBadgeCount = (filter: string) => {
-    switch (filter) {
-      case "my":
-        return myTasks.length;
-      case "available":
-        return availableTasks.length;
-      case "overdue":
-        return allTasks.filter((t) => t.status === "overdue").length;
-      case "completed":
-        return allTasks.filter((t) => t.status === "completed").length;
-      case "in_progress":
-        return allTasks.filter(
-          (t) => t.status === "claimed" || t.status === "in_progress"
-        ).length;
-      default:
-        return allTasks.length;
-    }
-  };
-
   const filters = [
     { key: "all", label: "All Tasks" },
-    { key: "my", label: "My Tasks" },
     { key: "available", label: "Available" },
     { key: "in_progress", label: "In Progress" },
     { key: "overdue", label: "Overdue" },
@@ -210,7 +188,16 @@ export default function Tasks() {
               >
                 {f.label}
                 <Badge variant="secondary" className="ml-2">
-                  {getFilterBadgeCount(f.key)}
+                  {
+                    (f.key === "available" ? availableTasks : allTasks).filter(
+                      (t) =>
+                        f.key === "all" ||
+                        (f.key === "in_progress"
+                          ? t.status === "claimed" ||
+                            t.status === "in_progress"
+                          : t.status === f.key)
+                    ).length
+                  }
                 </Badge>
               </Button>
             ))}
@@ -320,7 +307,10 @@ export default function Tasks() {
       {showCreateDialog && (
         <CreateTaskDialog
           isOpen={showCreateDialog}
-          onClose={() => setShowCreateDialog(false)}
+          onClose={() => {
+            setShowCreateDialog(false);
+            refetchTasks(); // refresh after creating
+          }}
         />
       )}
     </div>
