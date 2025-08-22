@@ -49,8 +49,7 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const defaultLat = 0; // Define with a sensible default or use relevant logic
-  const defaultLon = 0; // Define with a sensible default or use relevant logic
+
   // Get users in the same store for transfer options
   const { data: storeUsers = [] } = useQuery({
     queryKey: ["/api/users", user?.storeId],
@@ -136,17 +135,11 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
           });
         },
         () => {
-          // Handle geolocation error
-          toast({
-            title: "Location Access Denied",
-            description: "Unable to access your location.",
-            variant: "destructive",
-          });
+          claimTaskMutation.mutate();
         }
       );
     } else {
-      // Use default location if needed or handle accordingly
-      claimTaskMutation.mutate({ latitude: defaultLat, longitude: defaultLon });
+      claimTaskMutation.mutate();
     }
   };
 
@@ -325,7 +318,7 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
 
             {canCompleteTask() && (
               <Button
-                onClick={() => completeTaskMutation.mutate(transferReason)} // Passing transferReason or undefined
+                onClick={() => completeTaskMutation.mutate()}
                 disabled={completeTaskMutation.isPending}
                 variant="default"
                 className="bg-success-600 text-white hover:bg-success-700"

@@ -29,6 +29,13 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    proxy: {
+      // ✅ Forward all API requests to Express backend
+      "/api": {
+        target: "http://localhost:5000",
+        changeOrigin: true,
+      },
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],
