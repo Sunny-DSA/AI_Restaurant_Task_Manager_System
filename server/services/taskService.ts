@@ -2,23 +2,63 @@ import { storage } from "../storage";
 import { taskStatusEnum, roleEnum } from "@shared/schema";
 import { AuthService } from "./authService";
 
+// Robust date coercion for any incoming value
+const toDate = (v: unknown): Date | undefined => {
+  if (v == null) return undefined;
+  if (v instanceof Date) return v;
+  if (typeof v === "number" || typeof v === "string") {
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? undefined : d;
+    }
+  const d = new Date(String(v));
+  return isNaN(d.getTime()) ? undefined : d;
+};
+
 export class TaskService {
   static async createTask(taskData: any) {
-    const processedData = {
-      ...taskData,
-      scheduledFor:
-        typeof taskData.scheduledFor === "string"
-          ? new Date(taskData.scheduledFor)
-          : taskData.scheduledFor,
-      dueAt: taskData.dueAt
-        ? typeof taskData.dueAt === "string"
-          ? new Date(taskData.dueAt)
-          : taskData.dueAt
-        : undefined,
-      status: taskStatusEnum.PENDING,
-    };
+    if (!taskData.storeId) throw new Error("storeId is required");
+    if (!taskData.title) throw new Error("Task title is required");
 
-    return await storage.createTask(processedData);
+    const scheduledFor = toDate(taskData.scheduledFor) ?? new Date();
+    const dueAt = toDate(taskData.dueAt);
+
+    // Handle recurrence (daily/weekly/monthly) with object payload
+    if (taskData.recurrence) {
+      const { frequency, interval = 1, count = 1 } = taskData
+        .recurrence as {
+        frequency: "daily" | "weekly" | "monthly";
+        interval?: number;
+        count?: number;
+      };
+
+      const createdTasks: any[] = [];
+      let nextDate = new Date(scheduledFor);
+
+      for (let i = 0; i < count; i++) {
+        const t = await storage.createTask({
+          ...taskData,
+          scheduledFor: new Date(nextDate),
+          dueAt,
+          status: taskStatusEnum.PENDING,
+        });
+        createdTasks.push(t);
+
+        // increment recurrence
+        if (frequency === "daily") nextDate.setDate(nextDate.getDate() + interval);
+        if (frequency === "weekly") nextDate.setDate(nextDate.getDate() + 7 * interval);
+        if (frequency === "monthly") nextDate.setMonth(nextDate.getMonth() + interval);
+      }
+
+      return createdTasks;
+    }
+
+    // Non-recurring
+    return await storage.createTask({
+      ...taskData,
+      scheduledFor,
+      dueAt,
+      status: taskStatusEnum.PENDING,
+    });
   }
 
   static async createTaskFromTemplate(
@@ -29,9 +69,7 @@ export class TaskService {
     assigneeId?: number
   ) {
     const template = await storage.getTaskTemplate(templateId);
-    if (!template) {
-      throw new Error("Template not found");
-    }
+    if (!template) throw new Error("Template not found");
 
     const dueAt = new Date(scheduledFor);
     if (template.estimatedDuration) {
@@ -116,12 +154,7 @@ export class TaskService {
     const toUserCheckIn = await storage.getActiveCheckIn(toUserId);
     if (!toUserCheckIn) throw new Error("Target user must be checked in");
 
-    const transfer = await storage.transferTask(
-      taskId,
-      fromUserId,
-      toUserId,
-      reason
-    );
+    const transfer = await storage.transferTask(taskId, fromUserId, toUserId, reason);
 
     await storage.createNotification({
       userId: toUserId,
@@ -136,20 +169,32 @@ export class TaskService {
     return transfer;
   }
 
-  static async completeTask(taskId: number, userId: number, notes?: string) {
+  static async completeTask(
+    taskId: number,
+    userId: number,
+    notes?: string,
+    options?: { forceComplete?: boolean; overridePhotoRequirement?: boolean }
+  ) {
     const task = await storage.getTask(taskId);
     if (!task) throw new Error("Task not found");
 
-    if (task.claimedBy !== userId) {
+    const user = await storage.getUser(userId);
+    if (!user) throw new Error("User not found");
+
+    const isAdmin = user.role === roleEnum.ADMIN;
+    const isManager = user.role === roleEnum.STORE_MANAGER;
+    const canForce = isAdmin || isManager;
+
+    if (task.claimedBy !== userId && !(canForce && options?.forceComplete)) {
       throw new Error("Task not claimed by this user");
     }
 
     if (task.photoRequired && task.photoCount) {
       const photos = await storage.getTaskPhotos(taskId);
-      if (photos.length < task.photoCount) {
-        throw new Error(
-          `${task.photoCount} photos required, only ${photos.length} uploaded`
-        );
+      const haveEnough = photos.length >= task.photoCount;
+      const overriding = !!options?.overridePhotoRequirement && canForce;
+      if (!haveEnough && !overriding) {
+        throw new Error(`${task.photoCount} photos required, only ${photos.length} uploaded`);
       }
     }
 
@@ -169,7 +214,6 @@ export class TaskService {
     });
 
     if (task.storeId) {
-      const user = await storage.getUser(userId);
       const managers = await storage.getUsersByStore(task.storeId);
       const managerUsers = managers.filter(
         (u) =>
@@ -183,7 +227,7 @@ export class TaskService {
           userId: manager.id,
           type: "task_completed",
           title: "Task Completed",
-          message: `${user?.firstName} ${user?.lastName} completed task: ${task.title}`,
+          message: `${user.firstName} ${user.lastName} completed task: ${task.title}`,
           data: { taskId: task.id, completedBy: userId, actualDuration },
         });
       }

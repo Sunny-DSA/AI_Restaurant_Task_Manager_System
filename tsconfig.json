@@ -1,23 +1,25 @@
 {
-  "include": ["client/src/**/*", "shared/**/*", "server/**/*"],
-  "exclude": ["node_modules", "build", "dist", "**/*.test.ts"],
   "compilerOptions": {
-    "incremental": true,
-    "tsBuildInfoFile": "./node_modules/typescript/tsbuildinfo",
-    "noEmit": true,
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
     "module": "ESNext",
-    "strict": true,
-    "lib": ["esnext", "dom", "dom.iterable"],
-    "jsx": "preserve",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": false,
+    "noEmit": true,
+    "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "moduleResolution": "bundler",
-    "baseUrl": "./client/src",
-    "types": ["node", "vite/client"],
+    "types": ["node", "vite/client", "express", "multer"],
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["*"],
-      "@shared/*": ["../../shared/*"]
+      "@shared/*": ["shared/*"],
+      "@/*": ["client/src/*"],
+      "@client/*": ["client/*"],
+      "@server/*": ["server/*"]
     }
-  }
+  },
+  "include": ["client", "server", "shared", "vite.config.ts", "postcss.config.js", "tailwind.config.ts", "drizzle.config.ts"],
+  "exclude": ["dist", "node_modules"]
 }

@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { storage } from "../storage";
 import { InsertUser, roleEnum } from "@shared/schema";
 

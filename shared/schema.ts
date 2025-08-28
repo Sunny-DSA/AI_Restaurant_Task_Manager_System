@@ -1,38 +1,40 @@
-import { 
-  pgTable, 
-  text, 
-  serial, 
-  integer, 
-  boolean, 
-  timestamp, 
+// shared/schema.ts
+import {
+  pgTable,
+  text,
+  serial,
+  integer,
+  boolean,
+  timestamp,
   decimal,
-  uuid,
   jsonb,
-  index
+  index,
 } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
 import { relations } from "drizzle-orm";
+import { z } from "zod";
 
-// User roles enum
+/* =========================
+   Enums (const objects)
+========================= */
 export const roleEnum = {
-  MASTER_ADMIN: 'master_admin',
-  ADMIN: 'admin', 
-  STORE_MANAGER: 'store_manager',
-  EMPLOYEE: 'employee'
+  MASTER_ADMIN: "master_admin",
+  ADMIN: "admin",
+  STORE_MANAGER: "store_manager",
+  EMPLOYEE: "employee",
 } as const;
 
-// Task status enum
 export const taskStatusEnum = {
-  PENDING: 'pending',
-  AVAILABLE: 'available',
-  CLAIMED: 'claimed',
-  IN_PROGRESS: 'in_progress',
-  COMPLETED: 'completed',
-  OVERDUE: 'overdue'
+  PENDING: "pending",
+  AVAILABLE: "available",
+  CLAIMED: "claimed",
+  IN_PROGRESS: "in_progress",
+  COMPLETED: "completed",
+  OVERDUE: "overdue",
 } as const;
 
-// Session storage table (required for auth)
+/* =========================
+   Session storage (for auth)
+========================= */
 export const sessions = pgTable(
   "sessions",
   {
@@ -40,26 +42,31 @@ export const sessions = pgTable(
     sess: jsonb("sess").notNull(),
     expire: timestamp("expire").notNull(),
   },
-  (table) => [index("IDX_session_expire").on(table.expire)],
+  (table) => [index("IDX_session_expire").on(table.expire)]
 );
 
-// Users table
+/* =========================
+   Users
+========================= */
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").unique(),
   firstName: text("first_name"),
   lastName: text("last_name"),
   role: text("role").notNull().default(roleEnum.EMPLOYEE),
-  pin: text("pin"), // 4-digit PIN for store roles
-  passwordHash: text("password_hash"), // For admin roles
+  pin: text("pin"),
+  passwordHash: text("password_hash"),
   storeId: integer("store_id"),
+  employeeId: text("employee_id"),
   isActive: boolean("is_active").default(true),
   lastLogin: timestamp("last_login"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Stores table
+/* =========================
+   Stores
+========================= */
 export const stores = pgTable("stores", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -77,43 +84,49 @@ export const stores = pgTable("stores", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Task Lists for grouping related tasks
+/* =========================
+   Task Lists
+========================= */
 export const taskLists = pgTable("task_lists", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description"),
   createdBy: integer("created_by").notNull(),
-  recurrenceType: text("recurrence_type"), // daily, weekly, monthly, custom, none
-  recurrencePattern: text("recurrence_pattern"), // cron expression for custom
-  assigneeType: text("assignee_type").notNull().default("store_wide"), // store_wide, manager, specific_employee
-  assigneeId: integer("assignee_id"), // user ID if specific assignment
+  recurrenceType: text("recurrence_type"),
+  recurrencePattern: text("recurrence_pattern"),
+  assigneeType: text("assignee_type").notNull().default("store_wide"),
+  assigneeId: integer("assignee_id"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Task templates/checklists
+/* =========================
+   Task Templates
+========================= */
 export const taskTemplates = pgTable("task_templates", {
   id: serial("id").primaryKey(),
-  listId: integer("list_id"), // optional: if part of a task list
+  listId: integer("list_id"),
   title: text("title").notNull(),
   description: text("description"),
   storeId: integer("store_id"),
   createdBy: integer("created_by").notNull(),
-  recurrenceType: text("recurrence_type"), // daily, weekly, monthly, custom, none
-  recurrencePattern: text("recurrence_pattern"), // cron expression for custom
-  estimatedDuration: integer("estimated_duration"), // minutes
+  recurrenceType: text("recurrence_type"),
+  recurrencePattern: text("recurrence_pattern"),
+  estimatedDuration: integer("estimated_duration"),
   photoRequired: boolean("photo_required").default(false),
   photoCount: integer("photo_count").default(1),
-  assigneeType: text("assignee_type").notNull().default("store_wide"), // store_wide, manager, specific_employee
-  assigneeId: integer("assignee_id"), // user ID if specific assignment
-  priority: text("priority").default("normal"), // low, normal, high
+  assigneeType: text("assignee_type").notNull().default("store_wide"),
+  assigneeId: integer("assignee_id"),
+  priority: text("priority").default("normal"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Store assignments for templates and lists
+/* =========================
+   Store Assignments
+========================= */
 export const storeAssignments = pgTable("store_assignments", {
   id: serial("id").primaryKey(),
   entityType: text("entity_type").notNull(), // 'template' or 'list'
@@ -123,7 +136,9 @@ export const storeAssignments = pgTable("store_assignments", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Individual task instances
+/* =========================
+   Tasks (runtime)
+========================= */
 export const tasks = pgTable("tasks", {
   id: serial("id").primaryKey(),
   templateId: integer("template_id"),
@@ -131,31 +146,39 @@ export const tasks = pgTable("tasks", {
   title: text("title").notNull(),
   description: text("description"),
   assigneeType: text("assignee_type").notNull(), // store_wide, manager, specific_employee
-  assigneeId: integer("assignee_id"), // user ID if specific assignment
-  claimedBy: integer("claimed_by"), // user who claimed the task
-  completedBy: integer("completed_by"), // user who completed the task
+  assigneeId: integer("assignee_id"),
+  claimedBy: integer("claimed_by"),
+  completedBy: integer("completed_by"),
   status: text("status").notNull().default(taskStatusEnum.PENDING),
-  priority: text("priority").default("normal"), // low, normal, high
+  priority: text("priority").default("normal"),
   scheduledFor: timestamp("scheduled_for"),
   dueAt: timestamp("due_at"),
   claimedAt: timestamp("claimed_at"),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
   estimatedDuration: integer("estimated_duration"),
-  actualDuration: integer("actual_duration"), // minutes
+  actualDuration: integer("actual_duration"),
   photoRequired: boolean("photo_required").default(false),
   photoCount: integer("photo_count").default(1),
   photosUploaded: integer("photos_uploaded").default(0),
+
+  // Optional per-task geofence override (fallback to store fence)
+  geoLat: decimal("geo_lat", { precision: 10, scale: 8 }),
+  geoLng: decimal("geo_lng", { precision: 11, scale: 8 }),
+  geoRadiusM: integer("geo_radius_m"),
+
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Task subtasks/checklist items
+/* =========================
+   Task Items
+========================= */
 export const taskItems = pgTable("task_items", {
   id: serial("id").primaryKey(),
   taskId: integer("task_id").notNull(),
-  templateId: integer("template_id"), // reference to template item
+  templateId: integer("template_id"),
   title: text("title").notNull(),
   description: text("description"),
   isCompleted: boolean("is_completed").default(false),
@@ -165,11 +188,13 @@ export const taskItems = pgTable("task_items", {
   sortOrder: integer("sort_order").default(0),
 });
 
-// Task photos
+/* =========================
+   Task Photos
+========================= */
 export const taskPhotos = pgTable("task_photos", {
   id: serial("id").primaryKey(),
   taskId: integer("task_id").notNull(),
-  taskItemId: integer("task_item_id"), // optional, for specific subtask
+  taskItemId: integer("task_item_id"),
   url: text("url").notNull(),
   filename: text("filename").notNull(),
   mimeType: text("mime_type"),
@@ -180,7 +205,9 @@ export const taskPhotos = pgTable("task_photos", {
   uploadedAt: timestamp("uploaded_at").defaultNow(),
 });
 
-// Task transfers/handoffs
+/* =========================
+   Task Transfers
+========================= */
 export const taskTransfers = pgTable("task_transfers", {
   id: serial("id").primaryKey(),
   taskId: integer("task_id").notNull(),
@@ -190,19 +217,23 @@ export const taskTransfers = pgTable("task_transfers", {
   transferredAt: timestamp("transferred_at").defaultNow(),
 });
 
-// Notifications
+/* =========================
+   Notifications
+========================= */
 export const notifications = pgTable("notifications", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
-  type: text("type").notNull(), // task_assigned, task_completed, task_overdue, etc.
+  type: text("type").notNull(),
   title: text("title").notNull(),
   message: text("message").notNull(),
-  data: jsonb("data"), // additional metadata
+  data: jsonb("data"),
   isRead: boolean("is_read").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// User check-ins
+/* =========================
+   Check-ins
+========================= */
 export const checkIns = pgTable("check_ins", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
@@ -213,12 +244,11 @@ export const checkIns = pgTable("check_ins", {
   checkedOutAt: timestamp("checked_out_at"),
 });
 
-// Relations
+/* =========================
+   Relations
+========================= */
 export const usersRelations = relations(users, ({ one, many }) => ({
-  store: one(stores, {
-    fields: [users.storeId],
-    references: [stores.id],
-  }),
+  store: one(stores, { fields: [users.storeId], references: [stores.id] }),
   assignedTasks: many(tasks, { relationName: "assignedTasks" }),
   claimedTasks: many(tasks, { relationName: "claimedTasks" }),
   completedTasks: many(tasks, { relationName: "completedTasks" }),
@@ -229,38 +259,22 @@ export const usersRelations = relations(users, ({ one, many }) => ({
 export const storesRelations = relations(stores, ({ many }) => ({
   users: many(users),
   tasks: many(tasks),
-  taskTemplates: many(taskTemplates),
-  checkIns: many(checkIns),
-  storeAssignments: many(storeAssignments),
-}));
-
-export const storeAssignmentsRelations = relations(storeAssignments, ({ one }) => ({
-  store: one(stores, {
-    fields: [storeAssignments.storeId],
-    references: [stores.id],
-  }),
+  templates: many(taskTemplates),
 }));
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
-  template: one(taskTemplates, {
-    fields: [tasks.templateId],
-    references: [taskTemplates.id],
-  }),
-  store: one(stores, {
-    fields: [tasks.storeId],
-    references: [stores.id],
-  }),
+  store: one(stores, { fields: [tasks.storeId], references: [stores.id] }),
   assignee: one(users, {
     fields: [tasks.assigneeId],
     references: [users.id],
     relationName: "assignedTasks",
   }),
-  claimedBy: one(users, {
+  claimedByUser: one(users, {
     fields: [tasks.claimedBy],
     references: [users.id],
     relationName: "claimedTasks",
   }),
-  completedBy: one(users, {
+  completedByUser: one(users, {
     fields: [tasks.completedBy],
     references: [users.id],
     relationName: "completedTasks",
@@ -271,185 +285,119 @@ export const tasksRelations = relations(tasks, ({ one, many }) => ({
 }));
 
 export const taskListsRelations = relations(taskLists, ({ one, many }) => ({
-  createdBy: one(users, {
-    fields: [taskLists.createdBy],
-    references: [users.id],
-  }),
-  assignee: one(users, {
-    fields: [taskLists.assigneeId],
-    references: [users.id],
-  }),
+  createdBy: one(users, { fields: [taskLists.createdBy], references: [users.id] }),
+  assignee: one(users, { fields: [taskLists.assigneeId], references: [users.id] }),
   templates: many(taskTemplates),
   storeAssignments: many(storeAssignments),
 }));
 
 export const taskTemplatesRelations = relations(taskTemplates, ({ one, many }) => ({
-  list: one(taskLists, {
-    fields: [taskTemplates.listId],
-    references: [taskLists.id],
-  }),
-  store: one(stores, {
-    fields: [taskTemplates.storeId],
-    references: [stores.id],
-  }),
-  createdBy: one(users, {
-    fields: [taskTemplates.createdBy],
-    references: [users.id],
-  }),
-  assignee: one(users, {
-    fields: [taskTemplates.assigneeId],
-    references: [users.id],
-  }),
-  tasks: many(tasks),
-  storeAssignments: many(storeAssignments),
+  list: one(taskLists, { fields: [taskTemplates.listId], references: [taskLists.id] }),
+  store: one(stores, { fields: [taskTemplates.storeId], references: [stores.id] }),
+  items: many(taskItems),
 }));
 
 export const taskItemsRelations = relations(taskItems, ({ one }) => ({
-  task: one(tasks, {
-    fields: [taskItems.taskId],
-    references: [tasks.id],
-  }),
+  task: one(tasks, { fields: [taskItems.taskId], references: [tasks.id] }),
 }));
 
 export const taskPhotosRelations = relations(taskPhotos, ({ one }) => ({
-  task: one(tasks, {
-    fields: [taskPhotos.taskId],
-    references: [tasks.id],
-  }),
-  taskItem: one(taskItems, {
-    fields: [taskPhotos.taskItemId],
-    references: [taskItems.id],
-  }),
-  uploadedBy: one(users, {
-    fields: [taskPhotos.uploadedBy],
-    references: [users.id],
-  }),
+  task: one(tasks, { fields: [taskPhotos.taskId], references: [tasks.id] }),
 }));
 
 export const taskTransfersRelations = relations(taskTransfers, ({ one }) => ({
-  task: one(tasks, {
-    fields: [taskTransfers.taskId],
-    references: [tasks.id],
-  }),
-  fromUser: one(users, {
-    fields: [taskTransfers.fromUserId],
-    references: [users.id],
-  }),
-  toUser: one(users, {
-    fields: [taskTransfers.toUserId],
-    references: [users.id],
-  }),
+  task: one(tasks, { fields: [taskTransfers.taskId], references: [tasks.id] }),
 }));
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
-  user: one(users, {
-    fields: [notifications.userId],
-    references: [users.id],
-  }),
+  user: one(users, { fields: [notifications.userId], references: [users.id] }),
 }));
 
 export const checkInsRelations = relations(checkIns, ({ one }) => ({
-  user: one(users, {
-    fields: [checkIns.userId],
-    references: [users.id],
-  }),
-  store: one(stores, {
-    fields: [checkIns.storeId],
-    references: [stores.id],
-  }),
+  user: one(users, { fields: [checkIns.userId], references: [users.id] }),
+  store: one(stores, { fields: [checkIns.storeId], references: [stores.id] }),
 }));
 
-// Insert schemas
-export const insertUserSchema = createInsertSchema(users).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  lastLogin: true,
+export const recurrenceSchema = z.object({
+  frequency: z.enum(["daily", "weekly", "monthly"]),
+  interval: z.number().int().min(1).max(365).optional().default(1),
+  count: z.number().int().min(1).max(365).optional().default(1),
 });
 
-export const insertStoreSchema = createInsertSchema(stores).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  qrCode: true,
-  qrCodeSecret: true,
-  qrCodeExpiresAt: true,
-});
 
-export const insertTaskTemplateSchema = createInsertSchema(taskTemplates).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export const insertTaskSchema = createInsertSchema(tasks).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  claimedAt: true,
-  startedAt: true,
-  completedAt: true,
-  actualDuration: true,
-  photosUploaded: true,
-});
-
-export const insertTaskItemSchema = createInsertSchema(taskItems).omit({
-  id: true,
-  isCompleted: true,
-  photoUrl: true,
-  completedAt: true,
-});
-
-export const insertTaskPhotoSchema = createInsertSchema(taskPhotos).omit({
-  id: true,
-  uploadedAt: true,
-});
-
-export const insertCheckInSchema = createInsertSchema(checkIns).omit({
-  id: true,
-  checkedInAt: true,
-});
-
-// Types
+/* =========================
+   Types (prefer Drizzle $infer)
+========================= */
 export type User = typeof users.$inferSelect;
-export type InsertUser = z.infer<typeof insertUserSchema>;
+export type InsertUser = typeof users.$inferInsert;
+
 export type Store = typeof stores.$inferSelect;
-export type InsertStore = z.infer<typeof insertStoreSchema>;
+export type InsertStore = typeof stores.$inferInsert;
+
 export type TaskList = typeof taskLists.$inferSelect;
 export type InsertTaskList = typeof taskLists.$inferInsert;
+
 export type TaskTemplate = typeof taskTemplates.$inferSelect;
-export type InsertTaskTemplate = z.infer<typeof insertTaskTemplateSchema>;
+export type InsertTaskTemplate = typeof taskTemplates.$inferInsert;
+
 export type Task = typeof tasks.$inferSelect;
-export type InsertTask = z.infer<typeof insertTaskSchema>;
+export type InsertTask = typeof tasks.$inferInsert;
+
 export type TaskItem = typeof taskItems.$inferSelect;
-export type InsertTaskItem = z.infer<typeof insertTaskItemSchema>;
+export type InsertTaskItem = typeof taskItems.$inferInsert;
+
 export type TaskPhoto = typeof taskPhotos.$inferSelect;
-export type InsertTaskPhoto = z.infer<typeof insertTaskPhotoSchema>;
+export type InsertTaskPhoto = typeof taskPhotos.$inferInsert;
+
 export type TaskTransfer = typeof taskTransfers.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
-export type CheckIn = typeof checkIns.$inferSelect;
-export type InsertCheckIn = z.infer<typeof insertCheckInSchema>;
 
-// Additional validation schemas
+export type CheckIn = typeof checkIns.$inferSelect;
+export type InsertCheckIn = typeof checkIns.$inferInsert;
+
+/* =========================
+   Zod validators (runtime)
+========================= */
+
 export const loginSchema = z.object({
   email: z.string().email().optional(),
-  password: z.string().min(1).optional(),   //Added for adminlogin
+  password: z.string().min(1).optional(),
   pin: z.string().length(4).optional(),
   storeId: z.number().optional(),
-  employeeId: z.number().optional(),     // Added for adminlogin
-  rememberMe: z.boolean().optional(),    // Added for adminlogin
-}).refine(data => {
-  const isAdminLogin = data.email && data.password;
-  const isStoreLogin = data.storeId && data.employeeId;
-
-  return isAdminLogin || isStoreLogin;
-}, {
-  message: "Provide either (email + password) or (storeId + employeeId)",
+  employeeId: z.number().optional(),
+  rememberMe: z.boolean().optional(),
 });
 
+export const createStoreSchema = z.object({
+  name: z.string().min(1),
+  address: z.string().min(1),
+  phone: z.string().optional(),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
+  geofenceRadius: z.number().min(50).max(2000).optional(),
+});
 
-export const claimTaskSchema = z.object({
+export const createTaskSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().optional(),
+  storeId: z.number(),
+  assigneeId: z.number().optional(),
+  priority: z.enum(["low", "medium", "high"]).optional(),
+  photoRequired: z.boolean().optional(),
+  photoCount: z.number().min(1).max(10).optional(),
+  // (optional but recommended) allow scheduled/due as string or Date
+  scheduledFor: z.union([z.string(), z.date()]).optional(),
+  dueAt: z.union([z.string(), z.date()]).optional(),
+  // <-- key change
+  recurrence: recurrenceSchema.optional(),
+});
+export const uploadPhotoSchema = z.object({
   taskId: z.number(),
+  taskItemId: z.number().optional(),
+  filename: z.string(),
+  mimeType: z.string().optional(),
+  fileSize: z.number().optional(),
+  url: z.string().url(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
 });

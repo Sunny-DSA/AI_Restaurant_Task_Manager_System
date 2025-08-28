@@ -2,14 +2,12 @@ import { storage } from "../storage";
 import { InsertStore } from "@shared/schema";
 import QRCode from "qrcode";
 import crypto from "crypto";
+import { haversineMeters } from "../utils/geo";
 
 export class StoreService {
   static async createStore(storeData: InsertStore) {
     const store = await storage.createStore(storeData);
-
-    // Generate QR code for the new store
     await this.generateQRCode(store.id);
-
     return store;
   }
 
@@ -21,9 +19,10 @@ export class StoreService {
 
     const secret = crypto.randomBytes(32).toString("hex");
 
+    // NOTE: employeeId can be encoded if you want store-specific employee codes
     const qrData = {
       storeId: store.id,
-      employeeId: store.id, // Assuming employeeId = storeId temporarily
+      employeeId: store.id, // TODO: replace with real employeeId if encoding per-employee
       secret,
       version: 1,
     };
@@ -67,48 +66,32 @@ export class StoreService {
       );
 
       return { storeId, employeeId, isValid };
-    } catch (error) {
+    } catch {
       return { storeId: 0, isValid: false };
     }
   }
 
+  // Store-level geofence check; returns distance for UI/debug
   static validateGeofence(
     store: { latitude: string | null; longitude: string | null; geofenceRadius?: number },
     userLat: number,
     userLon: number
   ): { isValid: boolean; distance: number; allowedRadius: number } {
+    const allowedRadius = store.geofenceRadius || 100;
+
     if (!store.latitude || !store.longitude) {
-      return { isValid: false, distance: 0, allowedRadius: store.geofenceRadius || 100 };
+      return { isValid: false, distance: 0, allowedRadius };
     }
 
     const storeLat = parseFloat(store.latitude);
     const storeLon = parseFloat(store.longitude);
 
-    const distance = this.calculateDistance(storeLat, storeLon, userLat, userLon);
-    const allowedRadius = store.geofenceRadius || 100;
-    const isValid = distance <= allowedRadius;
+    const distance = haversineMeters(
+      { lat: storeLat, lng: storeLon },
+      { lat: userLat, lng: userLon }
+    );
 
-    return { isValid, distance, allowedRadius };
-  }
-
-  private static calculateDistance(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number
-  ): number {
-    const R = 6371e3;
-    const φ1 = (lat1 * Math.PI) / 180;
-    const φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-
-    const a = Math.sin(Δφ / 2) ** 2 +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) ** 2;
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
+    return { isValid: distance <= allowedRadius, distance, allowedRadius };
   }
 
   static async getStoreStats(storeId: number) {
@@ -116,10 +99,6 @@ export class StoreService {
       storage.getTaskStats(storeId),
       storage.getUserStats(storeId),
     ]);
-
-    return {
-      ...taskStats,
-      ...userStats,
-    };
+    return { ...taskStats, ...userStats };
   }
 }

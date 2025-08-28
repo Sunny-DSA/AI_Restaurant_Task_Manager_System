@@ -1,613 +1,507 @@
-import express, { type Request, type Response, type NextFunction } from "express";
-import session from "express-session";
-import { Server } from "http";
+// server/routes.ts
+import { Router, Request, Response } from "express";
+import { roleEnum, taskStatusEnum } from "@shared/schema";
+import { authenticateToken, requireRole } from "./middleware/auth";
+import { requireActiveCheckin } from "./middleware/requireCheckin";
+import { upload } from "./middleware/upload";
+import { withinFence } from "./utils/geo";
 import { storage } from "./storage";
-import { AuthService } from "./services/authService";
-import { StoreService } from "./services/storeService";
-import { TaskService } from "./services/taskService";
-import { authenticateToken } from "./middleware/auth";
 
-// Extend the session interface to include user
-declare module 'express-session' {
-  interface SessionData {
-    userId: number;
-    user: any;
+const router = Router();
+
+/* =========================================
+   HEALTH
+========================================= */
+router.get("/health", (_req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
+});
+
+/* =========================================
+   AUTH — QR + CHECK-IN / CHECK-OUT
+   (The login sets req.session.userId; we enrich req.user in auth middleware.)
+========================================= */
+
+/**
+ * POST /api/auth/verify-qr
+ * body: { qrData }
+ * NOTE: Minimal verification (parsing only).
+ * If you later sign QR payloads, call storage.getStore() and verify secret/expiry.
+ */
+router.post("/auth/verify-qr", async (req, res) => {
+  try {
+    const { qrData } = req.body ?? {};
+    const payload = JSON.parse(qrData);
+    const storeId = Number(payload?.storeId);
+    if (!storeId) return res.status(400).json({ message: "Invalid QR" });
+
+    const store = await storage.getStore(storeId);
+    if (!store) return res.status(404).json({ message: "Store not found" });
+
+    res.json({ success: true, storeId, storeName: store.name });
+  } catch {
+    res.status(400).json({ message: "Invalid QR" });
   }
-}
+});
 
-interface AuthenticatedRequest extends Request {
-  user?: any;
-}
+/**
+ * POST /api/auth/checkin
+ * body: { storeId, latitude, longitude }
+ */
+router.post("/auth/checkin", authenticateToken, async (req: Request, res: Response) => {
+  const user = (req as any).user as { id: number } | undefined;
+  if (!user?.id) return res.status(401).json({ message: "Unauthenticated" });
 
-export async function registerRoutes(
-  app: express.Application,
-): Promise<Server> {
+  const { storeId, latitude, longitude } = req.body ?? {};
+  if (!storeId) return res.status(400).json({ message: "storeId required" });
 
-  // Session configuration
-  app.use(session({
-    secret: process.env.SESSION_SECRET || 'your-session-secret-key',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: false, // Set to true in production with HTTPS
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      httpOnly: true
+  const store = await storage.getStore(Number(storeId));
+  if (!store) return res.status(404).json({ message: "Store not found" });
+
+  if (store.latitude != null && store.longitude != null && store.geofenceRadius) {
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: "Location required for geofenced check-in" });
     }
-  }));
+    const center = { lat: Number(store.latitude), lng: Number(store.longitude) };
+    const ok = withinFence({ lat, lng }, center, Number(store.geofenceRadius));
+    if (!ok) return res.status(403).json({ message: "Outside store geofence" });
+  }
 
-  // =========================
-  // Authentication Routes
-  // =========================
-  app.post("/api/auth/login", async (req: Request, res: Response) => {
-    try {
-      const { email, password, pin, storeId } = req.body;
-
-      let user;
-      if (email && password) {
-        user = await AuthService.authenticateWithEmail(email, password);
-      } else if (pin && storeId) {
-        user = await AuthService.authenticateWithPin(pin, storeId);
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid login credentials provided"
-        });
-      }
-
-      req.session.userId = user.id;
-      req.session.user = user;
-
-      res.json({
-        success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          storeId: user.storeId
+  const snapshotFence =
+    store.latitude != null && store.longitude != null && store.geofenceRadius
+      ? {
+          lat: Number(store.latitude),
+          lng: Number(store.longitude),
+          radiusM: Number(store.geofenceRadius),
         }
-      });
-    } catch (error: any) {
-      console.error('Login error:', error);
-      res.status(401).json({
-        success: false,
-        message: error.message || "Invalid email or password"
-      });
-    }
-  });
+      : undefined;
 
-  app.get("/api/auth/me", authenticateToken, (req: AuthenticatedRequest, res: Response) => {
-    res.json({
-      id: req.user.id,
-      email: req.user.email,
-      firstName: req.user.firstName,
-      lastName: req.user.lastName,
-      role: req.user.role,
-      storeId: req.user.storeId
+  // persist to session + in-memory storage.activeCheckins (so TaskService can see it)
+  (req as any).session.activeCheckin = {
+    storeId: Number(storeId),
+    storeName: store.name,
+    fence: snapshotFence,
+    startedAt: new Date().toISOString(),
+  };
+  storage.setActiveCheckin(user.id, (req as any).session.activeCheckin);
+
+  res.json({ success: true });
+});
+
+/**
+ * POST /api/auth/checkout
+ */
+router.post("/auth/checkout", authenticateToken, async (req, res) => {
+  const user = (req as any).user as { id: number } | undefined;
+  if (!user?.id) return res.status(401).json({ message: "Unauthenticated" });
+
+  (req as any).session.activeCheckin = undefined;
+  storage.clearActiveCheckin(user.id);
+
+  res.json({ success: true });
+});
+
+
+/**
+ * GET /api/auth/me
+ * Returns the currently authenticated user (via session).
+ */
+router.get("/auth/me", authenticateToken, (req, res) => {
+  // authenticateToken populates req.user
+  return res.json((req as any).user);
+});
+
+/**
+ * POST /api/auth/logout
+ * Destroys the session and clears the cookie.
+ */
+router.post("/auth/logout", (req, res) => {
+  try {
+    // If you're using a custom cookie name, replace "connect.sid"
+    const COOKIE = "connect.sid";
+    req.session?.destroy(() => {
+      res.clearCookie(COOKIE);
+      res.status(200).json({ ok: true });
     });
-  });
+  } catch {
+    // Be resilient: clear cookie anyway
+    res.clearCookie("connect.sid");
+    res.status(200).json({ ok: true });
+  }
+});
 
-  app.post("/api/auth/logout", (req: Request, res: Response) => {
-    req.session.destroy((err: any) => {
-      if (err) {
-        return res.status(500).json({ message: "Could not log out" });
-      }
-      res.json({ message: "Logged out successfully" });
+/* =========================================
+   TASKS — LISTING
+========================================= */
+
+/**
+ * GET /api/tasks/my
+ */
+router.get("/tasks/my", authenticateToken, async (req, res) => {
+  const user = (req as any).user!;
+  const rows = await storage.getTasks({ assigneeId: user.id });
+  res.json(rows);
+});
+
+/**
+ * GET /api/tasks/available?storeId=#
+ */
+router.get("/tasks/available", authenticateToken, async (req, res) => {
+  const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+  if (!storeId) return res.status(400).json({ message: "storeId required" });
+
+  const rows = await storage.getTasks({ storeId, status: taskStatusEnum.AVAILABLE });
+  res.json(rows);
+});
+
+/**
+ * GET /api/tasks
+ * Admins: all tasks (optional ?storeId=)
+ * Store managers: store tasks
+ * Employees: fallback to /tasks/my
+ */
+router.get("/tasks", authenticateToken, async (req, res) => {
+  const user = (req as any).user!;
+
+  if (user.role === roleEnum.EMPLOYEE) {
+    const mine = await storage.getTasks({ assigneeId: user.id });
+    return res.json(mine);
+  }
+
+  if (user.role === roleEnum.STORE_MANAGER) {
+    if (!user.storeId) {
+      return res.status(400).json({ message: "Store assignment required" });
+    }
+    const rows = await storage.getTasks({ storeId: user.storeId });
+    return res.json(rows);
+  }
+
+  // Admin / Master Admin
+  const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+  const rows = await storage.getTasks({ storeId });
+  return res.json(rows);
+});
+
+/* =========================================
+   TASKS — CREATE / UPDATE / DELETE
+========================================= */
+
+/**
+ * POST /api/tasks
+ * Only admin/store_manager can create.
+ * Accepts only known columns to match schema (prevents Drizzle type errors).
+ */
+router.post(
+  "/tasks",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req, res) => {
+    const user = (req as any).user!;
+    const b = req.body ?? {};
+
+    if (!b.title || !b.storeId) {
+      return res.status(400).json({ message: "title and storeId are required" });
+    }
+
+    if (user.role === roleEnum.STORE_MANAGER && user.storeId !== Number(b.storeId)) {
+      return res.status(403).json({ message: "Cannot create tasks for another store" });
+    }
+
+    // map body → schema-safe object
+    const newTask = await storage.createTask({
+      title: String(b.title),
+      description: b.description ?? null,
+      priority: b.priority ?? "normal",
+      storeId: Number(b.storeId),
+      assigneeType: b.assigneeId ? "specific_employee" : "store_wide",
+      assigneeId: b.assigneeId != null ? Number(b.assigneeId) : null,
+      status: taskStatusEnum.PENDING,
+      dueAt: b.dueAt ? new Date(b.dueAt) : null,
+      scheduledFor: b.scheduledFor ? new Date(b.scheduledFor) : null,
+      estimatedDuration: b.estimatedDuration != null ? Number(b.estimatedDuration) : null,
+      photoRequired: !!b.photoRequired,
+      photoCount: b.photoCount != null ? Number(b.photoCount) : 1,
+      // per-task fence override (decimal in DB → pass string)
+      geoLat: b.geoLat != null ? String(b.geoLat) : null,
+      geoLng: b.geoLng != null ? String(b.geoLng) : null,
+      geoRadiusM: b.geoRadiusM != null ? Number(b.geoRadiusM) : null,
+      notes: b.notes ?? null,
     });
-  });
 
-  // =========================
-  // QR Code Verification
-  // =========================
-  app.post("/api/auth/verify-qr", async (req: Request, res: Response) => {
+    res.json(newTask);
+  }
+);
+
+/**
+ * PUT /api/tasks/:id
+ * Only admin/store_manager can edit.
+ */
+router.put(
+  "/tasks/:id",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req, res) => {
+    const user = (req as any).user!;
+    const id = Number(req.params.id);
+    const patch = req.body ?? {};
+
+    if (user.role === roleEnum.STORE_MANAGER) {
+      const t = await storage.getTask(id);
+      if (t && t.storeId !== user.storeId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+    }
+
+    // Build schema-safe update object (only known fields)
+    const updates: any = {};
+    if ("title" in patch) updates.title = patch.title ?? null;
+    if ("description" in patch) updates.description = patch.description ?? null;
+    if ("priority" in patch) updates.priority = patch.priority ?? "normal";
+    if ("assigneeId" in patch) {
+      updates.assigneeId = patch.assigneeId != null ? Number(patch.assigneeId) : null;
+      updates.assigneeType = patch.assigneeId ? "specific_employee" : "store_wide";
+    }
+    if ("status" in patch) updates.status = patch.status ?? taskStatusEnum.PENDING;
+    if ("dueAt" in patch) updates.dueAt = patch.dueAt ? new Date(patch.dueAt) : null;
+    if ("scheduledFor" in patch)
+      updates.scheduledFor = patch.scheduledFor ? new Date(patch.scheduledFor) : null;
+    if ("estimatedDuration" in patch) {
+      updates.estimatedDuration =
+        patch.estimatedDuration != null ? Number(patch.estimatedDuration) : null;
+    }
+    if ("photoRequired" in patch) updates.photoRequired = !!patch.photoRequired;
+    if ("photoCount" in patch) updates.photoCount = Number(patch.photoCount) || 1;
+    if ("geoLat" in patch) updates.geoLat = patch.geoLat != null ? String(patch.geoLat) : null;
+    if ("geoLng" in patch) updates.geoLng = patch.geoLng != null ? String(patch.geoLng) : null;
+    if ("geoRadiusM" in patch) updates.geoRadiusM = patch.geoRadiusM != null ? Number(patch.geoRadiusM) : null;
+    if ("notes" in patch) updates.notes = patch.notes ?? null;
+
+    const updated = await storage.updateTask(id, updates);
+    res.json(updated);
+  }
+);
+
+/**
+ * DELETE /api/tasks/:id
+ */
+router.delete(
+  "/tasks/:id",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req, res) => {
+    const user = (req as any).user!;
+    const id = Number(req.params.id);
+
+    if (user.role === roleEnum.STORE_MANAGER) {
+      const t = await storage.getTask(id);
+      if (t && t.storeId !== user.storeId) return res.status(403).json({ message: "Forbidden" });
+    }
+
+    await storage.deleteTask(id);
+    res.json({ success: true });
+  }
+);
+
+/* =========================================
+   TASKS — CLAIM / TRANSFER
+========================================= */
+
+/**
+ * POST /api/tasks/:id/claim
+ * Employee claims a task (optional location in body).
+ */
+router.post("/tasks/:id/claim", authenticateToken, async (req, res) => {
+  const user = (req as any).user!;
+  if (user.role !== roleEnum.EMPLOYEE) {
+    return res.status(403).json({ message: "Employees only" });
+  }
+  const id = Number(req.params.id);
+  const { latitude, longitude } = req.body ?? {};
+
+  const t = await storage.getTask(id);
+  if (!t) return res.status(404).json({ message: "Task not found" });
+  if (t.assigneeId && t.assigneeId !== user.id) {
+    return res.status(403).json({ message: "Not your task" });
+  }
+
+  // Optionally check location against activeCheckin fence
+  const fence = (req as any).session?.activeCheckin?.fence as
+    | { lat: number; lng: number; radiusM: number }
+    | undefined;
+  if (fence) {
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: "Location required for claim" });
+    }
+    const ok = withinFence({ lat, lng }, { lat: fence.lat, lng: fence.lng }, fence.radiusM);
+    if (!ok) return res.status(403).json({ message: "Outside store geofence" });
+  }
+
+  const updated = await storage.claimTask(id, user.id);
+  res.json(updated);
+});
+
+/**
+ * POST /api/tasks/:id/transfer
+ * body: { toUserId, reason? }
+ * Admin/Manager only
+ */
+router.post(
+  "/tasks/:id/transfer",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req, res) => {
+    const user = (req as any).user!;
+    const id = Number(req.params.id);
+    const { toUserId } = req.body ?? {};
+    if (!toUserId) return res.status(400).json({ message: "toUserId required" });
+
+    const t = await storage.getTask(id);
+    if (!t) return res.status(404).json({ message: "Task not found" });
+
+    if (user.role === roleEnum.STORE_MANAGER && t.storeId !== user.storeId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const updated = await storage.transferTask(id, user.id, Number(toUserId), req.body?.reason);
+    res.json(updated);
+  }
+);
+
+/* =========================================
+   TASKS — PHOTO UPLOAD & COMPLETE (geofenced)
+========================================= */
+
+/**
+ * POST /api/tasks/:id/photos
+ * multipart/form-data: "photo", optional "latitude", "longitude", "taskItemId"
+ * Requires active check-in.
+ */
+router.post(
+  "/tasks/:id/photos",
+  authenticateToken,
+  requireActiveCheckin,
+  upload.single("photo"),
+  async (req, res) => {
     try {
-      const { qrData } = req.body;
-      if (!qrData) {
-        return res.status(400).json({ success: false, message: "QR data is required" });
+      const id = Number(req.params.id);
+      const user = (req as any).user!;
+      const lat = req.body?.latitude != null ? Number(req.body.latitude) : undefined;
+      const lng = req.body?.longitude != null ? Number(req.body.longitude) : undefined;
+      const point = lat != null && lng != null ? { lat, lng } : undefined;
+
+      const task = await storage.getTask(id);
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      if (user.role === roleEnum.EMPLOYEE && task.assigneeId && task.assigneeId !== user.id) {
+        return res.status(403).json({ message: "You can only upload for your assigned task" });
       }
 
-      const verification = await StoreService.verifyQRCode(qrData);
-      if (!verification.isValid) {
-        return res.status(400).json({ success: false, message: "Invalid or expired QR code" });
+      // Choose fence: task-specific OR activeCheckin snapshot
+      const activeCheckin = (req as any).activeCheckin as {
+        fence?: { lat: number; lng: number; radiusM: number };
+      };
+      const taskFence =
+        task.geoLat != null && task.geoLng != null && task.geoRadiusM
+          ? { lat: Number(task.geoLat), lng: Number(task.geoLng), radiusM: Number(task.geoRadiusM) }
+          : activeCheckin?.fence;
+
+      if (taskFence) {
+        if (!point || !withinFence(point, { lat: taskFence.lat, lng: taskFence.lng }, taskFence.radiusM)) {
+          return res.status(403).json({ message: "Photo must be taken at the store (outside geofence)" });
+        }
       }
 
-      res.json({
-        success: true,
-        storeId: verification.storeId,
-        employeeId: verification.employeeId,
+      const f = req.file as Express.Multer.File | undefined;
+      if (!f) return res.status(400).json({ message: "No photo uploaded" });
+
+      // URL that your frontend can access
+      const url = `/uploads/${f.filename}`;
+
+      await storage.createTaskPhoto({
+        taskId: id,
+        taskItemId: req.body?.taskItemId ? Number(req.body.taskItemId) : undefined,
+        url,
+        filename: f.originalname || f.filename,
+        mimeType: f.mimetype,
+        fileSize: f.size,
+        latitude: lat,
+        longitude: lng,
+        uploadedBy: user.id,
       });
-    } catch (error) {
-      console.error('QR verification error:', error);
-      res.status(500).json({ success: false, message: "QR verification failed" });
-    }
-  });
 
-  // =========================
-  // Task Routes
-  // =========================
-  app.get("/api/tasks/my", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const tasks = await TaskService.getTasksForUser(req.user.id, req.user.storeId);
-      res.json(tasks);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
+      const newCount = (task.photosUploaded ?? 0) + 1;
+      await storage.updateTask(id, { photosUploaded: newCount });
 
-  app.get("/api/tasks", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+      res.json({ success: true, photoUrl: url, photosUploaded: newCount });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Upload failed" });
+    }
+  }
+);
+
+/**
+ * POST /api/tasks/:id/complete
+ * body: { latitude?, longitude?, overridePhotoRequirement? }
+ * Requires active check-in.
+ */
+router.post(
+  "/tasks/:id/complete",
+  authenticateToken,
+  requireActiveCheckin,
+  async (req, res) => {
     try {
-      const { storeId, status, assigneeId, claimedBy } = req.query;
-      const tasks = await storage.getTasks({
-        storeId: storeId ? Number(storeId) : undefined,
-        status: status as string,
-        assigneeId: assigneeId ? Number(assigneeId) : undefined,
-        claimedBy: claimedBy ? Number(claimedBy) : undefined
+      const id = Number(req.params.id);
+      const user = (req as any).user!;
+      const { latitude, longitude, overridePhotoRequirement, notes } = req.body ?? {};
+
+      const task = await storage.getTask(id);
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      if (user.role === roleEnum.EMPLOYEE) {
+        if (task.assigneeId && task.assigneeId !== user.id) {
+          return res.status(403).json({ message: "Not your task" });
+        }
+        const need = task.photoCount ?? 1;
+        const have = task.photosUploaded ?? 0;
+        if (task.photoRequired && have < need && !overridePhotoRequirement) {
+          return res.status(400).json({ message: "Photo required before completion" });
+        }
+      }
+
+      const point =
+        typeof latitude === "number" && typeof longitude === "number"
+          ? { lat: Number(latitude), lng: Number(longitude) }
+          : undefined;
+
+      const activeCheckin = (req as any).activeCheckin as {
+        fence?: { lat: number; lng: number; radiusM: number };
+      };
+      const taskFence =
+        task.geoLat != null && task.geoLng != null && task.geoRadiusM
+          ? { lat: Number(task.geoLat), lng: Number(task.geoLng), radiusM: Number(task.geoRadiusM) }
+          : activeCheckin?.fence;
+
+      if (taskFence) {
+        if (!point || !withinFence(point, { lat: taskFence.lat, lng: taskFence.lng }, taskFence.radiusM)) {
+          return res.status(403).json({ message: "Completion must occur at the store (outside geofence)" });
+        }
+      }
+
+      const updated = await storage.updateTask(id, {
+        status: taskStatusEnum.COMPLETED,
+        completedAt: new Date(),
+        completedBy: user.id,
+        notes: notes ?? task.notes ?? null,
       });
-      res.json(tasks);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+
+      res.json({ success: true, task: updated });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Completion failed" });
     }
-  });
+  }
+);
 
-  app.get("/api/tasks/available", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { storeId } = req.query;
-      const userStoreId = storeId ? Number(storeId) : req.user.storeId;
-
-      if (!userStoreId) {
-        return res.status(400).json({ message: "Store ID is required" });
-      }
-
-      const tasks = await TaskService.getAvailableTasks(userStoreId);
-      res.json(tasks);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/tasks", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskData = req.body;
-      const task = await TaskService.createTask(taskData);
-      res.status(201).json(task);
-    } catch (error: any) {
-      console.error("Error creating task:", error);
-      res.status(500).json({ message: error.message || "Failed to create task" });
-    }
-  });
-
-  app.post("/api/tasks/from-template", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { templateId, storeId, scheduledFor, assigneeType, assigneeId } = req.body;
-      const task = await TaskService.createTaskFromTemplate(
-        templateId,
-        storeId,
-        new Date(scheduledFor),
-        assigneeType,
-        assigneeId
-      );
-      res.status(201).json(task);
-    } catch (error: any) {
-      console.error("Error creating task from template:", error);
-      res.status(500).json({ message: error.message || "Failed to create task from template" });
-    }
-  });
-
-  app.put("/api/tasks/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      const updates = req.body;
-      const updatedTask = await storage.updateTask(id, updates);
-      res.json(updatedTask);
-    } catch (error: any) {
-      console.error("Error updating task:", error);
-      res.status(500).json({ message: error.message || "Failed to update task" });
-    }
-  });
-
-  app.delete("/api/tasks/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      const deleted = await storage.deleteTask(id);
-      if (deleted) {
-        res.json({ message: "Task deleted successfully" });
-      } else {
-        res.status(404).json({ message: "Task not found" });
-      }
-    } catch (error: any) {
-      console.error("Error deleting task:", error);
-      res.status(500).json({ message: error.message || "Failed to delete task" });
-    }
-  });
-
-  app.post("/api/tasks/:id/claim", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.id);
-      const { latitude, longitude } = req.body;
-      const task = await TaskService.claimTask(taskId, req.user.id, latitude, longitude);
-      res.json(task);
-    } catch (error: any) {
-      console.error("Error claiming task:", error);
-      res.status(500).json({ message: error.message || "Failed to claim task" });
-    }
-  });
-
-  app.post("/api/tasks/:id/transfer", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.id);
-      const { toUserId, reason } = req.body;
-      const transfer = await TaskService.transferTask(taskId, req.user.id, toUserId, reason);
-      res.json(transfer);
-    } catch (error: any) {
-      console.error("Error transferring task:", error);
-      res.status(500).json({ message: error.message || "Failed to transfer task" });
-    }
-  });
-
-  app.post("/api/tasks/:id/complete", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.id);
-      const { notes } = req.body;
-      const task = await TaskService.completeTask(taskId, req.user.id, notes);
-      res.json(task);
-    } catch (error: any) {
-      console.error("Error completing task:", error);
-      res.status(500).json({ message: error.message || "Failed to complete task" });
-    }
-  });
-
-  app.post("/api/tasks/:id/start", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.id);
-      const task = await TaskService.updateTaskProgress(taskId, req.user.id);
-      res.json(task);
-    } catch (error: any) {
-      console.error("Error starting task:", error);
-      res.status(500).json({ message: error.message || "Failed to start task" });
-    }
-  });
-
-  // =========================
-  // Store Routes
-  // =========================
-  app.get("/api/stores", authenticateToken, async (_req: AuthenticatedRequest, res: Response) => {
-    try {
-      const stores = await storage.getStores();
-      res.json(stores);
-    } catch (error: any) {
-      res.status(500).json({ message: error.message });
-    }
-  });
-
-  app.post("/api/stores", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (req.user.role !== "MASTER_ADMIN") {
-        return res.status(403).json({ message: "Only Master Admin can create stores" });
-      }
-
-      const storeData = req.body;
-      const store = await StoreService.createStore(storeData);
-      res.status(201).json(store);
-    } catch (error: any) {
-      console.error("Error creating store:", error);
-      res.status(500).json({ message: error.message || "Failed to create store" });
-    }
-  });
-
-  app.put("/api/stores/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (req.user.role !== "MASTER_ADMIN") {
-        return res.status(403).json({ message: "Only Master Admin can update stores" });
-      }
-
-      const id = Number(req.params.id);
-      const updates = req.body;
-      const updatedStore = await storage.updateStore(id, updates);
-      res.json(updatedStore);
-    } catch (error: any) {
-      console.error("Error updating store:", error);
-      res.status(500).json({ message: error.message || "Failed to update store" });
-    }
-  });
-
-  app.delete("/api/stores/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (req.user.role !== "MASTER_ADMIN") {
-        return res.status(403).json({ message: "Only Master Admin can delete stores" });
-      }
-
-      const id = Number(req.params.id);
-      // Soft delete by setting isActive to false
-      await storage.updateStore(id, { isActive: false });
-      res.json({ message: "Store deleted successfully" });
-    } catch (error: any) {
-      console.error("Error deleting store:", error);
-      res.status(500).json({ message: error.message || "Failed to delete store" });
-    }
-  });
-
-  // =========================
-  // User Routes
-  // =========================
-  app.get("/api/users", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { storeId } = req.query;
-      const users = await storage.getActiveUsers(storeId ? Number(storeId) : undefined);
-      res.json(users);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // =========================
-  // Analytics Routes
-  // =========================
-  app.get("/api/analytics/tasks", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { storeId, dateFrom, dateTo } = req.query;
-      const stats = await storage.getTaskStats(
-        storeId ? Number(storeId) : undefined,
-        dateFrom ? new Date(dateFrom as string) : undefined,
-        dateTo ? new Date(dateTo as string) : undefined
-      );
-      res.json(stats);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.get("/api/analytics/users", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { storeId } = req.query;
-      const stats = await storage.getUserStats(storeId ? Number(storeId) : undefined);
-      res.json(stats);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // =========================
-  // Task Template Routes
-  // =========================
-  app.get("/api/task-templates", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { storeId } = req.query;
-      const templates = await storage.getTaskTemplates(storeId ? Number(storeId) : undefined);
-      res.json(templates);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/task-templates", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const templateData = req.body;
-      const template = await storage.createTaskTemplate(templateData);
-      res.status(201).json(template);
-    } catch (error: any) {
-      console.error("Error creating task template:", error);
-      res.status(500).json({ message: error.message || "Failed to create task template" });
-    }
-  });
-
-  app.put("/api/task-templates/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      const updates = req.body;
-      const updatedTemplate = await storage.updateTaskTemplate(id, updates);
-      res.json(updatedTemplate);
-    } catch (error: any) {
-      console.error("Error updating task template:", error);
-      res.status(500).json({ message: error.message || "Failed to update task template" });
-    }
-  });
-
-  // =========================
-  // Task Items Routes
-  // =========================
-  app.get("/api/tasks/:taskId/items", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.taskId);
-      const items = await storage.getTaskItems(taskId);
-      res.json(items);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/tasks/:taskId/items", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.taskId);
-      const itemData = {
-        ...req.body,
-        taskId
-      };
-      const item = await storage.createTaskItem(itemData);
-      res.status(201).json(item);
-    } catch (error: any) {
-      console.error("Error creating task item:", error);
-      res.status(500).json({ message: error.message || "Failed to create task item" });
-    }
-  });
-
-  app.put("/api/task-items/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      const updates = req.body;
-      const updatedItem = await storage.updateTaskItem(id, updates);
-      res.json(updatedItem);
-    } catch (error: any) {
-      console.error("Error updating task item:", error);
-      res.status(500).json({ message: error.message || "Failed to update task item" });
-    }
-  });
-
-  // =========================
-  // Task Photos Routes
-  // =========================
-  app.get("/api/tasks/:taskId/photos", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.taskId);
-      const photos = await storage.getTaskPhotos(taskId);
-      res.json(photos);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/tasks/:taskId/photos", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const taskId = Number(req.params.taskId);
-      const photoData = {
-        ...req.body,
-        taskId,
-        uploadedBy: req.user.id
-      };
-      const photo = await storage.createTaskPhoto(photoData);
-      res.status(201).json(photo);
-    } catch (error: any) {
-      console.error("Error uploading task photo:", error);
-      res.status(500).json({ message: error.message || "Failed to upload photo" });
-    }
-  });
-
-  // =========================
-  // Task Lists Routes
-  // =========================
-  app.get("/api/task-lists", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const lists = await storage.getTaskLists();
-      res.json(lists);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/task-lists", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const listData = {
-        ...req.body,
-        createdBy: req.user.id
-      };
-      const list = await storage.createTaskList(listData);
-      res.status(201).json(list);
-    } catch (error: any) {
-      console.error("Error creating task list:", error);
-      res.status(500).json({ message: error.message || "Failed to create task list" });
-    }
-  });
-
-  app.put("/api/task-lists/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      const updates = req.body;
-      const updatedList = await storage.updateTaskList(id, updates);
-      res.json(updatedList);
-    } catch (error: any) {
-      console.error("Error updating task list:", error);
-      res.status(500).json({ message: error.message || "Failed to update task list" });
-    }
-  });
-
-  app.delete("/api/task-lists/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      await storage.deleteTaskList(id);
-      res.json({ message: "Task list deleted successfully" });
-    } catch (error: any) {
-      console.error("Error deleting task list:", error);
-      res.status(500).json({ message: error.message || "Failed to delete task list" });
-    }
-  });
-
-  app.post("/api/task-lists/:id/duplicate", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      const duplicatedList = await storage.duplicateTaskList(id, req.user.id);
-      res.status(201).json(duplicatedList);
-    } catch (error: any) {
-      console.error("Error duplicating task list:", error);
-      res.status(500).json({ message: error.message || "Failed to duplicate task list" });
-    }
-  });
-
-  // =========================
-  // Check-in Routes
-  // =========================
-  app.get("/api/checkins/active", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const checkIn = await storage.getActiveCheckIn(req.user.id);
-      res.json(checkIn);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/checkins", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const checkInData = {
-        ...req.body,
-        userId: req.user.id
-      };
-      const checkIn = await storage.createCheckIn(checkInData);
-      res.status(201).json(checkIn);
-    } catch (error: any) {
-      console.error("Error creating check-in:", error);
-      res.status(500).json({ message: error.message || "Failed to check in" });
-    }
-  });
-
-  app.put("/api/checkins/:id", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      const updates = req.body;
-      const updatedCheckIn = await storage.updateCheckIn(id, updates);
-      res.json(updatedCheckIn);
-    } catch (error: any) {
-      console.error("Error updating check-in:", error);
-      res.status(500).json({ message: error.message || "Failed to update check-in" });
-    }
-  });
-
-  // =========================
-  // Notification Routes
-  // =========================
-  app.get("/api/notifications", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { limit } = req.query;
-      const notifications = await storage.getNotifications(
-        req.user.id,
-        limit ? Number(limit) : undefined
-      );
-      res.json(notifications);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.put("/api/notifications/:id/read", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const id = Number(req.params.id);
-      await storage.markNotificationRead(id);
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("Error marking notification as read:", error);
-      res.status(500).json({ message: error.message || "Failed to mark notification as read" });
-    }
-  });
-
-  // =========================
-  // Global Error Handler
-  // =========================
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("Unhandled error:", err);
-    res.status(err.status || 500).json({
-      message: err.message || "Internal server error",
-      stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
-    });
-  });
-
-  const server = new Server(app);
-  return server;
-}
+export default router;

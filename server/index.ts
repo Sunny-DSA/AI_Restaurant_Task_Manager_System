@@ -1,74 +1,57 @@
-import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
+// server/index.ts
+import express from "express";
+import session from "express-session";
+import path from "path";
+import cors from "cors";
+import routes from "./routes";
 
 const app = express();
+
+// CORS for the Vite client (credentials = cookies/session)
+app.use(
+  cors({
+    origin: true,          // reflect request origin
+    credentials: true,     // allow cookies
+  })
+);
+
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: true }));
 
-app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+// Sessions (dev-safe config; adjust for prod)
+app.use(
+  session({
+    name: "sid",
+    secret: process.env.SESSION_SECRET || "dev_secret_change_me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false,                   // set true if behind HTTPS
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    },
+  })
+);
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
+// serve uploaded files
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
+// mount API
+app.use("/api", routes);
 
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
-    }
-  });
-
-  next();
+// Multer error handler (size/type)
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err?.code === "LIMIT_FILE_SIZE") return res.status(413).json({ message: "File too large. Max 10MB." });
+  if (err?.message === "Only image files are allowed") return res.status(415).json({ message: err.message });
+  if (err) {
+    console.error("Unhandled error:", err);
+    return res.status(500).json({ message: err.message || "Internal server error" });
+  }
+  res.end();
 });
 
-(async () => {
-  const server = await registerRoutes(app);
-
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    res.status(status).json({ message });
-    // Log error for debugging but don't throw after sending response
-    if (app.get("env") === "development") {
-      console.error("Error:", err);
-    }
-  });
-
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (app.get("env") === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
-  }
-
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || '5000', 10);
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
-    log(`serving on port ${port}`);
-  });
-})();
+const PORT = Number(process.env.PORT) || 5000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on http://0.0.0.0:${PORT}`);
+});

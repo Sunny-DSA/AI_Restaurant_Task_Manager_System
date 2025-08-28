@@ -85,20 +85,20 @@ export default function Tasks() {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   // --- API Queries ---
-  const { data: allTasks = [], refetch: refetchTasks } = useQuery<Task[]>({
+  const { data: tasks = [], refetch: refetchTasks } = useQuery<Task[]>({
     queryKey: ["tasks", user?.storeId],
     queryFn: () =>
       user?.role === "admin" ||
       user?.role === "master_admin" ||
       user?.role === "store_manager"
-        ? taskApi.getTasks({ storeId: user?.storeId }) // admin/manager → all store tasks
-        : taskApi.getMyTasks(), // employees → only their tasks
+        ? taskApi.getTasks({ storeId: user?.storeId }) // managers/admins see all store tasks
+        : taskApi.getMyTasks(), // employees see only their own
     enabled: !!user,
   });
 
   const { data: availableTasks = [] } = useQuery<Task[]>({
     queryKey: ["availableTasks", user?.storeId],
-    queryFn: () => taskApi.getAvailableTasks(),
+    queryFn: () => taskApi.getAvailableTasks(user?.storeId),
     enabled:
       !!user &&
       (user.role === "admin" ||
@@ -114,29 +114,29 @@ export default function Tasks() {
 
   // --- Filtering logic ---
   const getFilteredTasks = (): Task[] => {
-    let tasks: Task[] = [];
+    let filtered: Task[] = [];
 
     switch (activeFilter) {
       case "available":
-        tasks = availableTasks;
+        filtered = availableTasks;
         break;
       case "overdue":
-        tasks = allTasks.filter((t) => t.status === "overdue");
+        filtered = tasks.filter((t) => t.status === "overdue");
         break;
       case "completed":
-        tasks = allTasks.filter((t) => t.status === "completed");
+        filtered = tasks.filter((t) => t.status === "completed");
         break;
       case "in_progress":
-        tasks = allTasks.filter(
+        filtered = tasks.filter(
           (t) => t.status === "claimed" || t.status === "in_progress"
         );
         break;
       default:
-        tasks = allTasks;
+        filtered = tasks;
     }
 
     if (searchTerm) {
-      tasks = tasks.filter(
+      filtered = filtered.filter(
         (t) =>
           t.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
           (t.description &&
@@ -145,18 +145,18 @@ export default function Tasks() {
     }
 
     if (selectedEmployee) {
-      tasks = tasks.filter((t) => String(t.assigneeId) === selectedEmployee);
+      filtered = filtered.filter((t) => String(t.assigneeId) === selectedEmployee);
     }
 
     if (selectedDate) {
-      tasks = tasks.filter((t) => {
+      filtered = filtered.filter((t) => {
         const taskDate = new Date(t.dueAt || t.createdAt).toDateString();
         const filterDate = new Date(selectedDate).toDateString();
         return taskDate === filterDate;
       });
     }
 
-    return tasks;
+    return filtered;
   };
 
   const filteredTasks = getFilteredTasks();
@@ -189,12 +189,11 @@ export default function Tasks() {
                 {f.label}
                 <Badge variant="secondary" className="ml-2">
                   {
-                    (f.key === "available" ? availableTasks : allTasks).filter(
+                    (f.key === "available" ? availableTasks : tasks).filter(
                       (t) =>
                         f.key === "all" ||
                         (f.key === "in_progress"
-                          ? t.status === "claimed" ||
-                            t.status === "in_progress"
+                          ? t.status === "claimed" || t.status === "in_progress"
                           : t.status === f.key)
                     ).length
                   }
@@ -229,7 +228,7 @@ export default function Tasks() {
             )}
 
             {(user?.role === "admin" ||
-              user?.role === "store_owner" ||
+              user?.role === "store_manager" ||
               user?.role === "master_admin") && (
               <Button onClick={() => setShowCreateDialog(true)}>
                 <Plus className="w-4 h-4 mr-2" />

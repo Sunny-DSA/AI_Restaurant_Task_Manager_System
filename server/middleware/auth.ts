@@ -1,7 +1,9 @@
+// server/middleware/auth.ts
 import { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
-import { roleEnum } from "@shared/schema";
+import { haversineMeters } from "../utils/geo";
 
+// attachs req.user
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: number;
@@ -19,17 +21,12 @@ export const authenticateToken = async (
   next: NextFunction
 ) => {
   try {
-    const userId = req.session?.userId;
-    
-    if (!userId) {
-      return res.status(401).json({ message: "Authentication required" });
-    }
-    
+    const userId = (req.session as any)?.userId;
+    if (!userId) return res.status(401).json({ message: "Authentication required" });
+
     const user = await storage.getUser(userId);
-    if (!user || !user.isActive) {
-      return res.status(401).json({ message: "Invalid user" });
-    }
-    
+    if (!user || !user.isActive) return res.status(401).json({ message: "Invalid user" });
+
     req.user = {
       id: user.id,
       email: user.email || undefined,
@@ -38,7 +35,6 @@ export const authenticateToken = async (
       role: user.role,
       storeId: user.storeId || undefined,
     };
-    
     next();
   } catch (error) {
     console.error("Authentication error:", error);
@@ -48,86 +44,81 @@ export const authenticateToken = async (
 
 export const requireRole = (allowedRoles: string[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json({ message: "Authentication required" });
-    }
-    
+    if (!req.user) return res.status(401).json({ message: "Authentication required" });
     if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         message: "Insufficient permissions",
         required: allowedRoles,
         current: req.user.role,
       });
     }
-    
     next();
   };
 };
 
+// Optional helper if you still gate actions by store membership
 export const requireStore = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  if (!req.user?.storeId && req.user?.role !== roleEnum.MASTER_ADMIN) {
+  if (!req.user?.storeId && req.user?.role !== "master_admin") {
     return res.status(403).json({ message: "Store assignment required" });
   }
   next();
 };
 
+/**
+ * Geofence validation middleware
+ * Matches current schema.ts field names: latitude, longitude, geofenceRadius
+ * Sends 400 if coords missing / store not configured; 403 if outside fence.
+ */
 export const validateGeofence = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const { latitude, longitude } = req.body;
-    
-    if (!latitude || !longitude) {
+    const { latitude, longitude } = req.body || {};
+    if (typeof latitude !== "number" || typeof longitude !== "number") {
       return res.status(400).json({ message: "Location required for this action" });
     }
-    
+
     if (!req.user?.storeId) {
       return res.status(400).json({ message: "Store information required" });
     }
-    
+
     const store = await storage.getStore(req.user.storeId);
-    if (!store || !store.latitude || !store.longitude) {
+    if (!store) return res.status(400).json({ message: "Store not found" });
+
+    // schema.ts: stores.latitude, stores.longitude are DECIMAL → often strings in JS; coerce to numbers
+    const lat =
+      store.latitude != null && store.latitude !== ""
+        ? Number(store.latitude)
+        : undefined;
+    const lng =
+      store.longitude != null && store.longitude !== ""
+        ? Number(store.longitude)
+        : undefined;
+    const radiusM =
+      typeof store.geofenceRadius === "number"
+        ? store.geofenceRadius
+        : store.geofenceRadius != null
+        ? Number(store.geofenceRadius)
+        : 100; // default 100m
+
+    if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
       return res.status(400).json({ message: "Store location not configured" });
     }
-    
-    // Calculate distance using Haversine formula
-    const distance = calculateDistance(
-      Number(store.latitude),
-      Number(store.longitude),
-      latitude,
-      longitude
-    );
-    
-    const allowedRadius = store.geofenceRadius || 100; // meters
-    
-    if (distance > allowedRadius) {
-      return res.status(403).json({ 
+
+    const distance = haversineMeters({ lat, lng }, { lat: latitude, lng: longitude });
+    if (distance > radiusM) {
+      return res.status(403).json({
         message: "Location verification failed",
         distance: Math.round(distance),
-        allowedRadius,
+        allowedRadius: radiusM,
       });
     }
-    
+
     next();
   } catch (error) {
     console.error("Geofence validation error:", error);
     res.status(500).json({ message: "Location validation error" });
   }
 };
-
-function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371e3; // Earth's radius in meters
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-
-  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
-}

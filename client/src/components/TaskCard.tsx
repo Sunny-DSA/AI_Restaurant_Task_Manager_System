@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import { taskApi, userApi } from "@/lib/api";
+import { taskApi, userApi, Task, User } from "@/lib/api";
 import { hasPermission } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,31 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Clock, User, Camera, UserCheck, ArrowRightLeft, CheckCircle } from "lucide-react"; // Removed unused List
+import { Clock, User as UserIcon, Camera, UserCheck, ArrowRightLeft, CheckCircle } from "lucide-react";
 import TaskDetailsDialog from "./TaskDetailsDialog";
-
-interface Task {
-  id: number;
-  title: string;
-  description?: string;
-  status: string;
-  priority: string;
-  assigneeType: string;
-  assigneeId?: number;
-  claimedBy?: number;
-  completedBy?: number;
-  dueAt?: string;
-  startedAt?: string;
-  completedAt?: string;
-  photoRequired: boolean;
-  photoCount: number;
-  photosUploaded: number;
-  estimatedDuration?: number;
-  actualDuration?: number;
-  storeId?: number;
-  completionNotes?: string;
-  claimedAt?: string;
-}
 
 interface TaskCardProps {
   task: Task;
@@ -49,114 +26,77 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const defaultLat = 0; // Define with a sensible default or use relevant logic
-  const defaultLon = 0; // Define with a sensible default or use relevant logic
-  // Get users in the same store for transfer options
-  const { data: storeUsers = [] } = useQuery({
-    queryKey: ["/api/users", user?.storeId],
+
+  // Cache store users for assignee labels
+  const { data: storeUsers = [] } = useQuery<User[]>({
+    queryKey: ["users", user?.storeId],
     queryFn: () => userApi.getUsers(user?.storeId),
-    enabled: !!user?.storeId && showTransferModal,
+    enabled: !!user?.storeId,
+    staleTime: 60_000,
   });
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["tasks", user?.storeId] });
+    queryClient.invalidateQueries({ queryKey: ["availableTasks", user?.storeId] });
+    onTaskUpdate?.();
+  };
 
   const claimTaskMutation = useMutation({
     mutationFn: (location?: { latitude: number; longitude: number }) =>
       taskApi.claimTask(task.id, location),
     onSuccess: () => {
-      toast({
-        title: "Task claimed successfully",
-        description: `You have claimed "${task.title}"`,
-      });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["myTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["availableTasks"] });
-      onTaskUpdate?.();
+      toast({ title: "Task claimed", description: `You claimed "${task.title}"` });
+      refresh();
     },
     onError: (error: Error) => {
-      toast({
-        title: "Failed to claim task",
-        description: error.message,
-        variant: "destructive",
-      });
+      toast({ title: "Failed to claim task", description: error.message, variant: "destructive" });
     },
   });
 
   const transferTaskMutation = useMutation({
-    mutationFn: () =>
-      taskApi.transferTask(task.id, parseInt(transferUserId), transferReason),
+    mutationFn: () => taskApi.transferTask(task.id, parseInt(transferUserId), transferReason),
     onSuccess: () => {
-      toast({
-        title: "Task transferred successfully",
-        description: `Task transferred to another team member`,
-      });
+      toast({ title: "Task transferred", description: "Task transferred to team member" });
       setShowTransferModal(false);
       setTransferUserId("");
       setTransferReason("");
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["myTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["availableTasks"] });
-      onTaskUpdate?.();
+      refresh();
     },
     onError: (error: Error) => {
-      toast({
-        title: "Failed to transfer task",
-        description: error.message,
-        variant: "destructive",
-      });
+      toast({ title: "Failed to transfer task", description: error.message, variant: "destructive" });
     },
   });
 
   const completeTaskMutation = useMutation({
-    mutationFn: (notes?: string) => taskApi.completeTask(task.id, notes),
+    mutationFn: () => taskApi.completeTask(task.id),
     onSuccess: () => {
-      toast({
-        title: "Task completed",
-        description: `"${task.title}" has been marked as complete`,
-      });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["myTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["availableTasks"] });
-      onTaskUpdate?.();
+      toast({ title: "Task completed", description: `"${task.title}" is now complete` });
+      refresh();
     },
     onError: (error: Error) => {
-      toast({
-        title: "Failed to complete task",
-        description: error.message,
-        variant: "destructive",
-      });
+      toast({ title: "Failed to complete task", description: error.message, variant: "destructive" });
     },
   });
 
   const handleClaimTask = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          claimTaskMutation.mutate({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          });
-        },
-        () => {
-          // Handle geolocation error
+        (pos) => claimTaskMutation.mutate({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        () =>
           toast({
-            title: "Location Access Denied",
-            description: "Unable to access your location.",
+            title: "Location required",
+            description: "Please allow location to claim tasks.",
             variant: "destructive",
-          });
-        }
+          })
       );
     } else {
-      // Use default location if needed or handle accordingly
-      claimTaskMutation.mutate({ latitude: defaultLat, longitude: defaultLon });
+      claimTaskMutation.mutate(undefined);
     }
   };
 
   const handleTransferTask = () => {
     if (!transferUserId) {
-      toast({
-        title: "Please select a user",
-        description: "You must select a team member to transfer this task to",
-        variant: "destructive",
-      });
+      toast({ title: "Select a user", description: "Pick a team member to transfer to", variant: "destructive" });
       return;
     }
     transferTaskMutation.mutate();
@@ -185,7 +125,6 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
       case "normal":
         return "bg-primary-100 text-primary-700";
       case "low":
-        return "bg-gray-100 text-gray-700";
       default:
         return "bg-gray-100 text-gray-700";
     }
@@ -193,28 +132,29 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
 
   const formatDuration = (minutes?: number) => {
     if (!minutes) return "N/A";
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
-  const canClaimTask = () => {
-    return (
-      (task.status === "available" ||
-        (task.status === "pending" && task.assigneeType === "store_wide")) &&
-      hasPermission(user?.role || "", "complete", "tasks")
-    );
-  };
+  const canClaimTask = () =>
+    (task.status === "available" || (task.status === "pending" && task.assigneeType === "store_wide")) &&
+    hasPermission(user?.role || "", "complete", "tasks");
 
-  const canTransferTask = () => {
-    return task.claimedBy === user?.id && task.status !== "completed";
-  };
-
-  const canCompleteTask = () => {
-    return task.claimedBy === user?.id && task.status !== "completed";
-  };
-
+  const canTransferTask = () => task.claimedBy === user?.id && task.status !== "completed";
+  const canCompleteTask = () => task.claimedBy === user?.id && task.status !== "completed";
   const isMyTask = task.claimedBy === user?.id || task.assigneeId === user?.id;
+
+  const assigneeLabel = (() => {
+    if (task.assigneeType === "specific_employee" && task.assigneeId) {
+      const found = storeUsers.find((u) => u.id === task.assigneeId);
+      if (found)
+        return `${found.firstName || ""} ${found.lastName || ""}`.trim() || found.email || `User #${found.id}`;
+      return `User #${task.assigneeId}`;
+    }
+    if (task.assigneeType === "manager") return "Store managers";
+    return "Anyone at the store";
+  })();
 
   return (
     <>
@@ -227,40 +167,30 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
       >
         <div className="flex items-start justify-between">
           <div className="flex-1">
-            <div className="flex items-center space-x-3 mb-3">
+            <div className="flex items-center flex-wrap gap-2 mb-3">
               <h3 className="text-lg font-semibold text-gray-900">{task.title}</h3>
-              <Badge className={getTaskStatusColor()}>
-                {task.status.replace("_", " ")}
-              </Badge>
+              <Badge className={getTaskStatusColor()}>{task.status.replace("_", " ")}</Badge>
               {task.priority !== "normal" && (
-                <Badge className={getPriorityColor()}>
-                  {task.priority} priority
-                </Badge>
+                <Badge className={getPriorityColor()}>{task.priority} priority</Badge>
               )}
             </div>
 
-            {task.description && (
-              <p className="text-gray-600 mb-4">{task.description}</p>
-            )}
+            {task.description && <p className="text-gray-600 mb-4">{task.description}</p>}
 
-            {/* Task Details */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 text-sm">
               {task.dueAt && (
                 <div className="flex items-center text-gray-600">
                   <Clock className="w-4 h-4 mr-2" />
                   <span>
                     Due:{" "}
-                    {new Date(task.dueAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+                    {new Date(task.dueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
               )}
 
               <div className="flex items-center text-gray-600">
-                <User className="w-4 h-4 mr-2" />
-                <span>{task.assigneeType.replace("_", " ")}</span>
+                <UserIcon className="w-4 h-4 mr-2" />
+                <span>{assigneeLabel}</span>
               </div>
 
               {task.photoRequired && (
@@ -280,16 +210,13 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
               )}
             </div>
 
-            {/* Claimed/Completed By Info */}
             {(task.claimedBy || task.completedBy) && (
               <div className="mb-4">
                 {task.claimedBy && task.status !== "completed" && (
                   <div className="flex items-center text-sm text-warning-600 bg-warning-50 px-3 py-2 rounded-lg">
                     <UserCheck className="w-4 h-4 mr-2" />
                     <span>
-                      {task.claimedBy === user?.id
-                        ? "You are working on this task"
-                        : "Task claimed by team member"}
+                      {task.claimedBy === user?.id ? "You are working on this task" : "Task claimed by team member"}
                     </span>
                   </div>
                 )}
@@ -299,11 +226,8 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
                     <CheckCircle className="w-4 h-4 mr-2" />
                     <span>
                       Completed{" "}
-                      {task.actualDuration
-                        ? `in ${formatDuration(task.actualDuration)}`
-                        : ""}
-                      {task.completedAt &&
-                        ` at ${new Date(task.completedAt).toLocaleTimeString()}`}
+                      {task.actualDuration ? `in ${formatDuration(task.actualDuration)}` : ""}
+                      {task.completedAt && ` at ${new Date(task.completedAt).toLocaleTimeString()}`}
                     </span>
                   </div>
                 )}
@@ -311,7 +235,6 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
             )}
           </div>
 
-          {/* Action Buttons */}
           <div className="ml-6 flex flex-col space-y-2">
             {canClaimTask() && (
               <Button
@@ -325,9 +248,8 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
 
             {canCompleteTask() && (
               <Button
-                onClick={() => completeTaskMutation.mutate(transferReason)} // Passing transferReason or undefined
+                onClick={() => completeTaskMutation.mutate()}
                 disabled={completeTaskMutation.isPending}
-                variant="default"
                 className="bg-success-600 text-white hover:bg-success-700"
               >
                 {completeTaskMutation.isPending ? "Completing..." : "Complete"}
@@ -335,40 +257,28 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
             )}
 
             {canTransferTask() && (
-              <Button
-                onClick={() => setShowTransferModal(true)}
-                variant="outline"
-                size="sm"
-              >
+              <Button onClick={() => setShowTransferModal(true)} variant="outline" size="sm">
                 <ArrowRightLeft className="w-4 h-4 mr-2" />
                 Transfer
               </Button>
             )}
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowDetailsDialog(true)}
-              data-testid="button-view-details"
-            >
+            <Button variant="outline" size="sm" onClick={() => setShowDetailsDialog(true)}>
               View Details
             </Button>
           </div>
         </div>
       </div>
 
-      {/* Transfer Task Modal */}
+      {/* Transfer Modal */}
       <Dialog open={showTransferModal} onOpenChange={setShowTransferModal}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Transfer Task</DialogTitle>
           </DialogHeader>
-
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Transfer to:
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Transfer to:</label>
               <Select value={transferUserId} onValueChange={setTransferUserId}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a team member" />
@@ -396,9 +306,7 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Reason (optional):
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Reason (optional):</label>
               <Textarea
                 value={transferReason}
                 onChange={(e) => setTransferReason(e.target.value)}
@@ -408,18 +316,10 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
             </div>
 
             <div className="flex space-x-3">
-              <Button
-                onClick={handleTransferTask}
-                disabled={transferTaskMutation.isPending || !transferUserId}
-                className="flex-1"
-              >
+              <Button onClick={handleTransferTask} disabled={transferTaskMutation.isPending || !transferUserId} className="flex-1">
                 {transferTaskMutation.isPending ? "Transferring..." : "Transfer Task"}
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => setShowTransferModal(false)}
-                className="flex-1"
-              >
+              <Button variant="outline" onClick={() => setShowTransferModal(false)} className="flex-1">
                 Cancel
               </Button>
             </div>
@@ -429,10 +329,11 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
 
       {/* Task Details Dialog */}
       <TaskDetailsDialog
-        task={task}
-        isOpen={showDetailsDialog}
+        open={showDetailsDialog}
         onClose={() => setShowDetailsDialog(false)}
-        onTaskUpdate={onTaskUpdate}
+        task={task}
+        currentUserRole={user?.role || ""}
+        onUpdated={refresh}
       />
     </>
   );
