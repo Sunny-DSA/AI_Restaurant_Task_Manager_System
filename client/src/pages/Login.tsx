@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useLocation } from "wouter";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,12 +12,21 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogIn, Store } from "lucide-react";
 
 export default function LoginPage() {
-  const { login, isLoggingIn } = useAuth();
+  const { login, isLoggingIn, isAuthenticated } = useAuth();
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const [tab, setTab] = useState<"admin" | "store">("admin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [storeId, setStoreId] = useState("");
   const [pin, setPin] = useState("");
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      setLocation("/", { replace: true });
+    }
+  }, [isAuthenticated, setLocation]);
 
   useEffect(() => {
     if (tab === "admin") {
@@ -30,16 +41,45 @@ export default function LoginPage() {
   const handleSubmit = useCallback(async () => {
     try {
       if (tab === "admin") {
+        if (!email || !password) {
+          toast({
+            title: "Missing Credentials",
+            description: "Please enter both email and password",
+            variant: "destructive",
+          });
+          return;
+        }
         await login({ email, password });
+        // Navigation will happen automatically via useEffect when isAuthenticated changes
+        toast({
+          title: "Login Successful",
+          description: "Welcome back!",
+        });
       } else {
         const sid = Number(storeId);
-        if (!sid || !pin) throw new Error("Enter store id & pin");
+        if (!sid || !pin) {
+          toast({
+            title: "Missing Credentials",
+            description: "Please enter both Store ID and PIN",
+            variant: "destructive",
+          });
+          return;
+        }
         await login({ storeId: sid, pin });
+        toast({
+          title: "Login Successful",
+          description: "Welcome back!",
+        });
       }
-    } catch {
-      // error is surfaced by apiRequest throw; page can show toast if you wire it
+    } catch (error: any) {
+      console.error("Login error:", error);
+      toast({
+        title: "Login Failed",
+        description: error.message || "Invalid credentials. Please try again.",
+        variant: "destructive",
+      });
     }
-  }, [tab, email, password, storeId, pin, login]);
+  }, [tab, email, password, storeId, pin, login, toast]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">

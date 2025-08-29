@@ -160,12 +160,6 @@ export const tasks = pgTable("tasks", {
   photoRequired: boolean("photo_required").default(false),
   photoCount: integer("photo_count").default(1),
   photosUploaded: integer("photos_uploaded").default(0),
-
-  // Optional per-task geofence override (fallback to store fence)
-  geoLat: decimal("geo_lat", { precision: 10, scale: 8 }),
-  geoLng: decimal("geo_lng", { precision: 11, scale: 8 }),
-  geoRadiusM: integer("geo_radius_m"),
-
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
