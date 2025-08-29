@@ -112,7 +112,7 @@ export default function Tasks() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   // stores (for managers/admins)
   const { data: stores = [] } = useQuery({
@@ -132,7 +132,7 @@ export default function Tasks() {
       // admin/manager: allow filtering
       return taskApi.getTasks({
         storeId: user.role === "store_manager" ? user.storeId : undefined,
-        status: statusFilter || undefined,
+        status: statusFilter === "all" ? undefined : statusFilter || undefined,
       });
     },
     enabled: !!user,
@@ -179,7 +179,7 @@ export default function Tasks() {
             <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v)}>
               <SelectTrigger className="w-[220px]"><SelectValue placeholder="All statuses" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">(All)</SelectItem>
+                <SelectItem value="all">All Statuses</SelectItem>
                 <SelectItem value="pending">Pending</SelectItem>
                 <SelectItem value="available">Available</SelectItem>
                 <SelectItem value="claimed">Claimed</SelectItem>

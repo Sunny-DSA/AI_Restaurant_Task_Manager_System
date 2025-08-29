@@ -481,10 +481,8 @@ router.post(
       const activeCheckin = (req as any).activeCheckin as {
         fence?: { lat: number; lng: number; radiusM: number };
       };
-      const taskFence =
-        task.geoLat != null && task.geoLng != null && task.geoRadiusM
-          ? { lat: Number(task.geoLat), lng: Number(task.geoLng), radiusM: Number(task.geoRadiusM) }
-          : activeCheckin?.fence;
+      // Use store fence only (task-level geo fields removed)
+      const taskFence = activeCheckin?.fence;
 
       if (taskFence) {
         if (!point || !withinFence(point, { lat: taskFence.lat, lng: taskFence.lng }, taskFence.radiusM)) {
@@ -553,10 +551,8 @@ router.post(
       const activeCheckin = (req as any).activeCheckin as {
         fence?: { lat: number; lng: number; radiusM: number };
       };
-      const taskFence =
-        task.geoLat != null && task.geoLng != null && task.geoRadiusM
-          ? { lat: Number(task.geoLat), lng: Number(task.geoLng), radiusM: Number(task.geoRadiusM) }
-          : activeCheckin?.fence;
+      // Use store fence only (task-level geo fields removed)
+      const taskFence = activeCheckin?.fence;
 
       if (taskFence) {
         if (!point || !withinFence(point, { lat: taskFence.lat, lng: taskFence.lng }, taskFence.radiusM)) {
@@ -579,5 +575,137 @@ router.post(
     }
   }
 );
+
+/* =========================================
+   STORES
+========================================= */
+
+// GET /api/stores - Get all stores (admin) or user's store
+router.get("/stores", authenticateToken, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    
+    if (user.role === "master_admin" || user.role === "admin") {
+      const stores = await storage.getStores();
+      return res.json(stores || []);
+    } else if (user.storeId) {
+      const store = await storage.getStore(user.storeId);
+      return res.json(store ? [store] : []);
+    }
+    
+    return res.json([]);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || "Failed to fetch stores" });
+  }
+});
+
+// GET /api/stores/:id - Get specific store
+router.get("/stores/:id", authenticateToken, async (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const user = (req as any).user;
+    
+    // Check permissions
+    if (user.role !== "master_admin" && user.role !== "admin" && user.storeId !== storeId) {
+      return res.status(403).json({ message: "Unauthorized to view this store" });
+    }
+    
+    const store = await storage.getStore(storeId);
+    if (!store) {
+      return res.status(404).json({ message: "Store not found" });
+    }
+    
+    res.json(store);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || "Failed to fetch store" });
+  }
+});
+
+// POST /api/stores - Create new store (admin only)
+router.post("/stores", authenticateToken, requireRole(["master_admin", "admin"]), async (req, res) => {
+  try {
+    const storeData = req.body;
+    const newStore = await storage.createStore(storeData);
+    res.status(201).json(newStore);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || "Failed to create store" });
+  }
+});
+
+// PUT /api/stores/:id - Update store (admin only)
+router.put("/stores/:id", authenticateToken, requireRole(["master_admin", "admin"]), async (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const updates = req.body;
+    
+    const updatedStore = await storage.updateStore(storeId, updates);
+    if (!updatedStore) {
+      return res.status(404).json({ message: "Store not found" });
+    }
+    
+    res.json(updatedStore);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || "Failed to update store" });
+  }
+});
+
+// GET /api/stores/:id/stats - Get store statistics
+router.get("/stores/:id/stats", authenticateToken, async (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const user = (req as any).user;
+    
+    // Check permissions
+    if (user.role !== "master_admin" && user.role !== "admin" && user.storeId !== storeId) {
+      return res.status(403).json({ message: "Unauthorized to view store stats" });
+    }
+    
+    // Get task stats
+    const tasks = await storage.getTasks({ storeId });
+    const taskStats = {
+      totalTasks: tasks.length,
+      completedTasks: tasks.filter((t: any) => t.status === "completed").length,
+      pendingTasks: tasks.filter((t: any) => t.status === "pending").length,
+      inProgressTasks: tasks.filter((t: any) => t.status === "in_progress").length,
+    };
+    
+    // Get user stats
+    const users = await storage.getUsersByStore(storeId);
+    const userStats = {
+      totalEmployees: users.length,
+      activeEmployees: users.filter((u: any) => u.isActive).length,
+    };
+    
+    res.json({ ...taskStats, ...userStats });
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || "Failed to fetch store stats" });
+  }
+});
+
+// POST /api/stores/:id/generate-qr - Generate QR code for store
+router.post("/stores/:id/generate-qr", authenticateToken, requireRole(["master_admin", "admin", "store_manager"]), async (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const user = (req as any).user;
+    
+    // Check permissions
+    if (user.role === "store_manager" && user.storeId !== storeId) {
+      return res.status(403).json({ message: "Unauthorized to generate QR for this store" });
+    }
+    
+    const store = await storage.getStore(storeId);
+    if (!store) {
+      return res.status(404).json({ message: "Store not found" });
+    }
+    
+    // Generate QR code data
+    const qrData = JSON.stringify({ storeId, timestamp: Date.now() });
+    const qrCode = `data:image/svg+xml;base64,${Buffer.from(qrData).toString('base64')}`;
+    
+    res.json({ qrCode });
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || "Failed to generate QR code" });
+  }
+});
 
 export default router;
