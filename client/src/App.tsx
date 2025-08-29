@@ -22,6 +22,13 @@ function ProtectedRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
   const [, setLocation] = useLocation();
 
+  // If not logged in, go to /login
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      setLocation("/login", { replace: true });
+    }
+  }, [isAuthenticated, isLoading, setLocation]);
+
   // While the auth state loads
   if (isLoading) {
     return (
@@ -31,12 +38,14 @@ function ProtectedRoutes() {
     );
   }
 
-  // If not logged in, go to /login
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setLocation("/login", { replace: true });
-    }
-  }, [isAuthenticated, setLocation]);
+  // If not authenticated, show loading (redirect will happen via useEffect)
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary" />
+      </div>
+    );
+  }
 
   // Authenticated area
   return (

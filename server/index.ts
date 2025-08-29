@@ -4,6 +4,8 @@ import session from "express-session";
 import path from "path";
 import cors from "cors";
 import routes from "./routes";
+import { createServer } from "http";
+import { setupVite, serveStatic } from "./vite";
 
 const app = express();
 
@@ -49,7 +51,21 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   res.end();
 });
 
-const PORT = Number(process.env.API_PORT ?? process.env.PORT) || 5001;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server listening on http://0.0.0.0:${PORT}`);
-});
+const isDev = process.env.NODE_ENV !== "production";
+const PORT = Number(process.env.API_PORT ?? process.env.PORT) || 5000;
+
+async function startServer() {
+  const server = createServer(app);
+  
+  if (isDev) {
+    await setupVite(app, server);
+  } else {
+    serveStatic(app);
+  }
+  
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer().catch(console.error);
