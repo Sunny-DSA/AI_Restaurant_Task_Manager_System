@@ -21,97 +21,79 @@ router.get("/health", (_req, res) => {
    AUTH
 ========================================= */
 
-/**
- * POST /api/auth/login
- * - Admin/manager: { email, password }
- * - Store login:   { storeId, pin }
- * Sets req.session.userId on success and returns a minimal user payload.
- */
-router.post("/auth/login", async (req: Request, res: Response) => {
-  try {
-    const { email, password, storeId, pin } = req.body ?? {};
+/* ---- AUTH ---- */
 
-    let user:
-      | {
-          id: number;
-          email?: string | null;
-          firstName?: string | null;
-          lastName?: string | null;
-          role: string;
-          storeId?: number | null;
-          isActive: boolean;
-        }
-      | null = null;
+// POST /api/auth/login
+// body: { email, password }  OR  { pin, storeId }
+router.post("/auth/login", async (req, res) => {
+  try {
+    const { email, password, pin, storeId } = req.body ?? {};
+    let user;
 
     if (email && password) {
       user = await AuthService.authenticateWithEmail(String(email), String(password));
-    } else if (storeId && pin) {
+    } else if (pin && storeId) {
       user = await AuthService.authenticateWithPin(String(pin), Number(storeId));
     } else {
-      return res
-        .status(400)
-        .json({ message: "Provide either {email,password} or {storeId,pin}" });
+      return res.status(400).json({ message: "Missing credentials" });
     }
 
-    // set session
-    (req.session as any).userId = user.id;
+    // set session user id
+    (req as any).session.userId = user.id;
 
     return res.json({
       id: user.id,
-      email: user.email ?? undefined,
-      firstName: user.firstName ?? undefined,
-      lastName: user.lastName ?? undefined,
+      email: user.email ?? null,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
       role: user.role,
-      storeId: user.storeId ?? undefined,
+      storeId: user.storeId ?? null,
     });
   } catch (err: any) {
-    return res.status(401).json({ message: err?.message || "Invalid credentials" });
+    const message = err?.message || "Invalid credentials";
+    return res.status(401).json({ message });
   }
 });
 
-/**
- * GET /api/auth/me
- */
+// GET /api/auth/me
 router.get("/auth/me", authenticateToken, (req, res) => {
   return res.json((req as any).user);
 });
 
-/**
- * POST /api/auth/logout
- */
+// POST /api/auth/logout
 router.post("/auth/logout", (req, res) => {
+  const COOKIE = "sid"; // session cookie name above
   try {
     req.session?.destroy(() => {
-      // match cookie name configured in server/index.ts (name: "sid")
-      res.clearCookie("sid");
+      res.clearCookie(COOKIE);
       res.status(200).json({ ok: true });
     });
   } catch {
-    res.clearCookie("sid");
+    res.clearCookie(COOKIE);
     res.status(200).json({ ok: true });
   }
 });
-
 /**
  * POST /api/auth/verify-qr
  * body: { qrData }
  * Accepts simple JSON like: {"storeId":123}
  */
+// Optional QR verification
 router.post("/auth/verify-qr", async (req, res) => {
   try {
     const { qrData } = req.body ?? {};
-    const payload = JSON.parse(String(qrData || "{}"));
-    const storeId = Number(payload?.storeId);
-    if (!storeId) return res.status(400).json({ message: "Invalid QR" });
-
-    const store = await storage.getStore(storeId);
+    const payload = JSON.parse(String(qrData));
+    const id = Number(payload?.storeId);
+    if (!id) return res.status(400).json({ message: "Invalid QR" });
+    const store = await storage.getStore(id);
     if (!store) return res.status(404).json({ message: "Store not found" });
-
-    res.json({ success: true, storeId, storeName: store.name });
+    res.json({ success: true, storeId: id, storeName: store.name });
   } catch {
     res.status(400).json({ message: "Invalid QR" });
   }
 });
+
+
 
 /**
  * POST /api/auth/checkin

@@ -1,110 +1,105 @@
 // client/src/hooks/useAuth.tsx
-import React, { useCallback, useMemo } from "react";
-import { useLocation } from "wouter";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { apiRequest } from "@/lib/queryClient";
 
-export type SessionUser = {
+type User = {
   id: number;
   email?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   role: string;
   storeId?: number | null;
-} | null;
+};
 
-type LoginBody =
-  | { email: string; password: string; rememberMe?: boolean }
-  | { pin: string; storeId: number; rememberMe?: boolean };
+type LoginArgs =
+  | { email: string; password: string } // admin
+  | { storeId: number; pin: string };   // store employee
 
-// --- tiny pass-through provider so existing imports work ---
-export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) => <>{children}</>;
+type VerifyQRArgs = { qrData: string };
 
-// --- API helpers ---
-async function fetchMe(): Promise<SessionUser> {
-  const res = await apiRequest("GET", "/api/auth/me");
-  return res.json();
-}
-async function postLogin(body: LoginBody): Promise<SessionUser> {
-  const res = await apiRequest("POST", "/api/auth/login", body);
-  return res.json();
-}
-async function postLogout(): Promise<void> {
-  await apiRequest("POST", "/api/auth/logout");
-}
+type AuthCtx = {
+  user: User | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  isLoggingIn: boolean;
+  isVerifyingQR: boolean;
+  login: (args: LoginArgs) => Promise<void>;
+  verifyQR: (args: VerifyQRArgs) => Promise<void>;
+  logout: () => Promise<void>;
+};
 
-// optional QR helper
-async function verifyQrServerFirst(qrData: string): Promise<{ storeId?: number; storeName?: string }> {
-  try {
-    const res = await apiRequest("POST", "/api/auth/verify-qr", { qrData });
-    return res.json();
-  } catch (err: any) {
-    try {
-      const parsed = JSON.parse(qrData);
-      if (parsed && typeof parsed.storeId === "number") {
-        return { storeId: parsed.storeId, storeName: parsed.storeName };
+const Ctx = createContext<AuthCtx | null>(null);
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setLoading] = useState(true);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isVerifyingQR, setIsVerifyingQR] = useState(false);
+
+  // bootstrap session
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiRequest("GET", "/api/auth/me");
+        const me = (await res.json()) as User;
+        setUser(me);
+      } catch {
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
-    } catch {}
-    throw err;
-  }
+    })();
+  }, []);
+
+  const login = useCallback(async (args: LoginArgs) => {
+    setIsLoggingIn(true);
+    try {
+      const res = await apiRequest("POST", "/api/auth/login", args);
+      const me = (await res.json()) as User;
+      setUser(me);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }, []);
+
+  const verifyQR = useCallback(async (args: VerifyQRArgs) => {
+    setIsVerifyingQR(true);
+    try {
+      await apiRequest("POST", "/api/auth/verify-qr", args);
+      // no state change by default; your Login page may parse storeId from QR
+    } finally {
+      setIsVerifyingQR(false);
+    }
+  }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      await apiRequest("POST", "/api/auth/logout");
+    } finally {
+      setUser(null);
+    }
+  }, []);
+
+  return (
+    <Ctx.Provider
+      value={{
+        user,
+        isLoading,
+        isAuthenticated: !!user,
+        isLoggingIn,
+        isVerifyingQR,
+        login,
+        verifyQR,
+        logout,
+      }}
+    >
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function useAuth() {
-  const [, setLocation] = useLocation();
-
-  const { data: user, isLoading, isError } = useQuery<SessionUser>({
-    queryKey: ["/api/auth/me"],
-    queryFn: fetchMe,
-    retry: false,
-    select: (u) => u ?? null,
-  });
-
-  const isAuthenticated = useMemo(() => !!user, [user]);
-
-  const loginMutation = useMutation({
-    mutationFn: (body: LoginBody) => postLogin(body),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      setLocation("/", { replace: true });
-    },
-  });
-
-  const logoutMutation = useMutation({
-    mutationFn: () => postLogout(),
-    onSuccess: async () => {
-      queryClient.setQueryData<SessionUser>(["/api/auth/me"], null);
-      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      setLocation("/login", { replace: true });
-    },
-  });
-
-  const verifyQrMutation = useMutation({
-    mutationFn: (qrData: string) => verifyQrServerFirst(qrData),
-  });
-
-  const login = useCallback(async (body: LoginBody) => {
-    await loginMutation.mutateAsync(body);
-  }, [loginMutation]);
-
-  const logout = useCallback(async () => {
-    await logoutMutation.mutateAsync();
-  }, [logoutMutation]);
-
-  const verifyQR = useCallback(async ({ qrData }: { qrData: string }) => {
-    return await verifyQrMutation.mutateAsync(qrData);
-  }, [verifyQrMutation]);
-
-  return {
-    user,
-    isAuthenticated,
-    isLoading: isLoading && !isError,
-    // login/logout
-    login,
-    isLoggingIn: loginMutation.isPending,
-    logout,
-    isLoggingOut: logoutMutation.isPending,
-    // optional QR
-    verifyQR,
-    isVerifyingQR: verifyQrMutation.isPending,
-  };
+  const v = useContext(Ctx);
+  if (!v) throw new Error("useAuth must be used within <AuthProvider>");
+  return v;
 }

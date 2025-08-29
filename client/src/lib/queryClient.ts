@@ -5,33 +5,29 @@ export const queryClient = new QueryClient();
 
 type Method = "GET" | "POST" | "PUT" | "DELETE";
 
-export async function apiRequest(
-  method: Method,
-  url: string,
-  body?: unknown,
-  headers: Record<string, string> = {}
-): Promise<Response> {
+export async function apiRequest(method: Method, url: string, body?: unknown) {
+  const headers: Record<string, string> = {};
+  let fetchBody: BodyInit | undefined;
+
+  if (body instanceof FormData) {
+    fetchBody = body;
+    // do not set content-type for FormData
+  } else if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    fetchBody = JSON.stringify(body);
+  }
+
   const res = await fetch(url, {
     method,
-    credentials: "include", // <-- CRUCIAL FOR SESSIONS
-    headers: {
-      "Content-Type": body instanceof FormData ? undefined! : "application/json",
-      ...headers,
-    },
-    body: body
-      ? body instanceof FormData
-        ? (body as FormData)
-        : JSON.stringify(body)
-      : undefined,
+    headers,
+    body: fetchBody,
+    credentials: "include", // 🔑 send/receive the session cookie
   });
 
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try {
-      const j = await res.clone().json();
-      if (j?.message) msg = j.message;
-    } catch {}
-    throw new Error(msg);
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
   }
+
   return res;
 }
