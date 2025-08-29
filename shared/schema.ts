@@ -57,7 +57,6 @@ export const users = pgTable("users", {
   pin: text("pin"),
   passwordHash: text("password_hash"),
   storeId: integer("store_id"),
-  employeeId: text("employee_id"),
   isActive: boolean("is_active").default(true),
   lastLogin: timestamp("last_login"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -364,7 +363,6 @@ export const loginSchema = z.object({
   password: z.string().min(1).optional(),
   pin: z.string().length(4).optional(),
   storeId: z.number().optional(),
-  employeeId: z.number().optional(),
   rememberMe: z.boolean().optional(),
 });
 
