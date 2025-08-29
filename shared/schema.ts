@@ -1,4 +1,4 @@
-// shared/schema.ts
+
 import {
   pgTable,
   text,

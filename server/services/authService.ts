@@ -1,103 +1,115 @@
+// server/services/authService.ts
 import bcrypt from "bcryptjs";
 import { storage } from "../storage";
 import { InsertUser, roleEnum } from "@shared/schema";
 
+function generate4DigitPin(): string {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
 export class AuthService {
+  /** Email + password login (admins/managers) */
   static async authenticateWithEmail(email: string, password: string) {
-    const user = await storage.getUserByEmail(email);
-    if (!user || !user.passwordHash) {
-      throw new Error("Invalid credentials");
-    }
+    const normEmail = String(email || "").trim().toLowerCase();
+    if (!normEmail || !password) throw new Error("Invalid credentials");
+
+    const user = await storage.getUserByEmail(normEmail);
+    if (!user || !user.passwordHash) throw new Error("Invalid credentials");
 
     const isValid = await bcrypt.compare(password, user.passwordHash);
-    if (!isValid) {
-      throw new Error("Invalid credentials");
-    }
+    if (!isValid) throw new Error("Invalid credentials");
 
-    if (!user.isActive) {
-      throw new Error("Account is disabled");
-    }
+    if (!user.isActive) throw new Error("Account is disabled");
 
-    // Update last login
     await storage.updateUser(user.id, { lastLogin: new Date() });
-
     return user;
   }
 
+  /** Store PIN login (employees/managers) */
   static async authenticateWithPin(pin: string, storeId: number) {
-    const user = await storage.getUserByPin(pin, storeId);
-    if (!user) {
-      throw new Error("Invalid PIN or store");
-    }
+    const normPin = String(pin || "").trim();
+    const sid = Number(storeId);
+    if (!normPin || !Number.isFinite(sid)) throw new Error("Invalid PIN or store");
 
-    if (!user.isActive) {
-      throw new Error("Account is disabled");
-    }
+    const user = await storage.getUserByPin(normPin, sid);
+    if (!user) throw new Error("Invalid PIN or store");
+    if (!user.isActive) throw new Error("Account is disabled");
 
-    // Update last login
     await storage.updateUser(user.id, { lastLogin: new Date() });
-
     return user;
   }
 
+  /**
+   * Create user.
+   * - If `password` provided, hashes it (for admin roles).
+   * - For STORE_MANAGER / EMPLOYEE, generates a unique 4-digit PIN per store.
+   *
+   * Note: Some builds see InsertUser as `{}` due to type inference across aliases.
+   * We safely access needed fields via `(userData as any)` to avoid TS property errors.
+   */
   static async createUser(userData: InsertUser, password?: string) {
-    // Hash password if provided (for admin roles)
+    // Safely pluck the fields we need (avoid TS complaining about `{}`)
+    const role: string | undefined = (userData as any)?.role;
+    const storeIdRaw = (userData as any)?.storeId;
+    const storeId: number | undefined =
+      storeIdRaw == null ? undefined : Number(storeIdRaw);
+
     let passwordHash: string | undefined;
     if (password) {
       passwordHash = await bcrypt.hash(password, 10);
     }
 
-    // Generate PIN for store roles
     let pin: string | undefined;
-    if (
-      userData.role === roleEnum.STORE_MANAGER ||
-      userData.role === roleEnum.EMPLOYEE
-    ) {
-      pin = this.generatePin();
-      // Ensure PIN is unique for the store
-      while (
-        userData.storeId &&
-        (await storage.getUserByPin(pin, userData.storeId))
-      ) {
-        pin = this.generatePin();
+    if (role === roleEnum.STORE_MANAGER || role === roleEnum.EMPLOYEE) {
+      if (storeId) {
+        let candidate = generate4DigitPin();
+        // ensure uniqueness within the same store
+        // eslint-disable-next-line no-await-in-loop
+        while (await storage.getUserByPin(candidate, storeId)) {
+          candidate = generate4DigitPin();
+        }
+        pin = candidate;
+      } else {
+        // still assign a PIN if no storeId yet
+        pin = generate4DigitPin();
       }
     }
 
-    return await storage.createUser({
-      ...userData,
+    const created = await storage.createUser({
+      ...(userData as any),
       passwordHash,
       pin,
-    });
+    } as any);
+
+    return created;
   }
 
+  /** Update a user's password (hashes new password) */
   static async updateUserPassword(userId: number, newPassword: string) {
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    return await storage.updateUser(userId, { passwordHash });
+    return storage.updateUser(userId, { passwordHash });
   }
 
+  /** Reset a user's PIN (ensures uniqueness per store) */
   static async resetUserPin(userId: number) {
     const user = await storage.getUser(userId);
     if (!user || !user.storeId) {
       throw new Error("User not found or not assigned to store");
     }
 
-    let newPin = this.generatePin();
+    let newPin = generate4DigitPin();
+    // ensure unique pin in this store
+    // eslint-disable-next-line no-await-in-loop
     while (await storage.getUserByPin(newPin, user.storeId)) {
-      newPin = this.generatePin();
+      newPin = generate4DigitPin();
     }
 
-    return await storage.updateUser(userId, { pin: newPin });
+    await storage.updateUser(userId, { pin: newPin });
+    return { pin: newPin };
   }
 
-  private static generatePin(): string {
-    return Math.floor(1000 + Math.random() * 9000).toString();
-  }
-
-  static hasPermission(
-    userRole: string,
-    action: string,
-    module: string
-  ): boolean {
+  /** Simple permission matrix (optional helper for UI/backoffice) */
+  static hasPermission(userRole: string, action: string, module: string): boolean {
     const permissions: Record<string, Record<string, string[]>> = {
       [roleEnum.MASTER_ADMIN]: {
         stores: ["create", "read", "update", "delete"],
@@ -127,18 +139,24 @@ export class AuthService {
 
     const userPermissions = permissions[userRole];
     if (!userPermissions) return false;
-
     const modulePermissions = userPermissions[module];
     if (!modulePermissions) return false;
-
     return modulePermissions.includes(action);
   }
 
-  // ✅ Dual Login Method Added
-  static async dualLogin(credentials: any) {
+  /**
+   * Dual login (optional helper) – supports either admin (email+password)
+   * or store (storeId + employeeId) flows. Not required by routes, but kept
+   * for UI compatibility if you use it anywhere.
+   */
+  static async dualLogin(credentials: {
+    email?: string;
+    password?: string;
+    storeId?: number;
+    employeeId?: number;
+  }) {
     const { email, password, storeId, employeeId } = credentials;
 
-    // Admin login
     if (email && password) {
       const user = await this.authenticateWithEmail(email, password);
       return {
@@ -148,20 +166,15 @@ export class AuthService {
       };
     }
 
-    // Store login
     if (storeId && employeeId) {
-      const store = await storage.getStore(storeId);
-      const employee = await storage.getUser(employeeId);
+      const store = await storage.getStore(Number(storeId));
+      const employee = await storage.getUser(Number(employeeId));
 
       if (!store || !employee || employee.storeId !== store.id) {
         throw new Error("Invalid store login");
       }
+      if (!employee.isActive) throw new Error("Employee account is disabled");
 
-      if (!employee.isActive) {
-        throw new Error("Employee account is disabled");
-      }
-
-      // Update last login
       await storage.updateUser(employee.id, { lastLogin: new Date() });
 
       return {

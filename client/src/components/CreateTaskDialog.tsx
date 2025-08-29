@@ -1,220 +1,210 @@
-      import { useState, useEffect } from "react";
-      import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-      import { Button } from "@/components/ui/button";
-      import { Input } from "@/components/ui/input";
-      import { Select, SelectItem } from "@/components/ui/select";
-      import { taskApi, storeApi, userApi, Store, User } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { taskApi, userApi, storeApi } from "@/lib/api";
+import type { User } from "@/types"; 
 
-      interface Props {
-        open: boolean;
-        onClose: () => void;
-        onCreated: () => void;
+
+type Priority = "low" | "medium" | "high";
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  onCreated?: () => void; // call this to refetch
+};
+
+export default function CreateTaskDialog({ open, onClose, onCreated }: Props) {
+  const { toast } = useToast();
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState<Priority>("medium");
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
+  const [assigneeId, setAssigneeId] = useState<number | undefined>(undefined);
+  const [photoRequired, setPhotoRequired] = useState(false);
+  const [photoCount, setPhotoCount] = useState<number>(1);
+  const [recurrence, setRecurrence] = useState<{
+    frequency: "daily" | "weekly" | "monthly";
+    interval?: number;
+    count?: number;
+  } | undefined>(undefined);
+
+  const [stores, setStores] = useState<Array<{ id: number; name: string }>>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // load stores on open
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const s = await storeApi.getStores();
+        setStores(s);
+      } catch (e) {
+        // ignore
+      }
+    })();
+  }, [open]);
+
+  // load users for selected store
+  useEffect(() => {
+    (async () => {
+      if (!storeId) { setUsers([]); return; }
+      try {
+        const u = await userApi.getUsers(storeId);
+        setUsers(u);
+      } catch {
+        setUsers([]);
+      }
+    })();
+  }, [storeId]);
+
+  const resetForm = () => {
+    setTitle("");
+    setDescription("");
+    setPriority("medium");
+    setStoreId(undefined);
+    setAssigneeId(undefined);
+    setPhotoRequired(false);
+    setPhotoCount(1);
+    setRecurrence(undefined);
+  };
+
+  const handleCreate = async () => {
+    try {
+      if (!title.trim()) {
+        toast({ title: "Missing title", description: "Please enter a task title.", variant: "destructive" });
+        return;
+      }
+      if (!storeId) {
+        toast({ title: "Select store", description: "Please pick a store.", variant: "destructive" });
+        return;
       }
 
-      type Recurrence = {
-        frequency: "daily" | "weekly" | "monthly";
-        interval: number;
-        count: number;
-      };
+      setLoading(true);
+      await taskApi.createTask({
+        title,
+        description,
+        priority, // typed union
+        storeId,
+        assigneeId,
+        photoRequired,
+        photoCount: photoRequired ? photoCount : undefined,
+        recurrence,
+      });
 
-      export default function CreateTaskDialog({ open, onClose, onCreated }: Props) {
-        const [title, setTitle] = useState("");
-        const [description, setDescription] = useState("");
-        const [priority, setPriority] = useState("medium");
-        const [storeId, setStoreId] = useState<number | undefined>();
-        const [assigneeId, setAssigneeId] = useState<number | undefined>();
-        const [photoRequired, setPhotoRequired] = useState(false);
-        const [photoCount, setPhotoCount] = useState(1);
-        const [recurrence, setRecurrence] = useState<Recurrence | null>(null);
+      toast({ title: "Task created" });
+      onCreated?.();    // let parent refetch
+      resetForm();
+      onClose();
+    } catch (err: any) {
+      toast({
+        title: "Failed to create task",
+        description: err?.message ?? String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-        const [stores, setStores] = useState<Store[]>([]);
-        const [users, setUsers] = useState<User[]>([]);
-        const [loading, setLoading] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Create Task</DialogTitle>
+        </DialogHeader>
 
-        useEffect(() => {
-          storeApi.getStores().then(setStores);
-        }, []);
+        <div className="space-y-3">
+          <div>
+            <Label>Title</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
+          </div>
 
-        useEffect(() => {
-          if (storeId) {
-            userApi.getUsers(storeId).then(setUsers);
-          } else {
-            setUsers([]);
-          }
-        }, [storeId]);
+          <div>
+            <Label>Description</Label>
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" />
+          </div>
 
-        const handleSubmit = async () => {
-          try {
-            if (!title.trim()) {
-              alert("Please enter a task title.");
-              return;
-            }
-            if (!storeId) {
-              alert("Please select a store.");
-              return;
-            }
-
-            setLoading(true);
-            await taskApi.createTask({
-              title,
-              description,
-              priority,
-              storeId,
-              assigneeId,
-              photoRequired,
-              // don't send 0 (schema expects min 1 when provided)
-              photoCount: photoRequired ? photoCount : undefined,
-              recurrence: recurrence || undefined,
-            });
-
-            onCreated();
-            onClose();
-          } catch (err: any) {
-            alert("Error creating task: " + (err?.message ?? String(err)));
-          } finally {
-            setLoading(false);
-          }
-        };
-
-        return (
-          <Dialog open={open} onOpenChange={onClose}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Create Task</DialogTitle>
-              </DialogHeader>
-
-              <div className="space-y-3">
-                <Input
-                  placeholder="Task Title"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-
-                <Input
-                  placeholder="Description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-
-                <Select value={priority} onValueChange={setPriority}>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Priority</Label>
+              <Select value={priority} onValueChange={(v) => setPriority(v as Priority)}>
+                <SelectTrigger><SelectValue placeholder="Priority" /></SelectTrigger>
+                <SelectContent>
                   <SelectItem value="low">Low</SelectItem>
                   <SelectItem value="medium">Medium</SelectItem>
                   <SelectItem value="high">High</SelectItem>
-                </Select>
+                </SelectContent>
+              </Select>
+            </div>
 
-                <Select
-                  value={storeId?.toString() || ""}
-                  onValueChange={(v) => setStoreId(v ? Number(v) : undefined)}
-                >
-                  <SelectItem value="">Select Store</SelectItem>
+            <div>
+              <Label>Store</Label>
+              <Select
+                value={storeId ? String(storeId) : ""}
+                onValueChange={(v) => setStoreId(v ? Number(v) : undefined)}
+              >
+                <SelectTrigger><SelectValue placeholder="Select store" /></SelectTrigger>
+                <SelectContent>
                   {stores.map((s) => (
-                    <SelectItem key={s.id} value={s.id.toString()}>
-                      {s.name}
-                    </SelectItem>
+                    <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
                   ))}
-                </Select>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-                {storeId && (
-                  <Select
-                    value={assigneeId?.toString() || ""}
-                    onValueChange={(v) => setAssigneeId(v ? Number(v) : undefined)}
-                  >
-                    <SelectItem value="">Unassigned</SelectItem>
-                    {users.map((u) => (
-                      <SelectItem key={u.id} value={u.id.toString()}>
-                        {u.firstName} {u.lastName}
-                      </SelectItem>
-                    ))}
-                  </Select>
-                )}
+          <div>
+            <Label>Assignee (optional)</Label>
+            <Select
+              value={assigneeId ? String(assigneeId) : ""}
+              onValueChange={(v) => setAssigneeId(v ? Number(v) : undefined)}
+            >
+              <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Unassigned</SelectItem>
+                {users.map((u) => (
+                  <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={photoRequired}
-                    onChange={(e) => setPhotoRequired(e.target.checked)}
-                  />
-                  <span>Photo Required</span>
-                  {photoRequired && (
-                    <Input
-                      type="number"
-                      min={1}
-                      value={photoCount}
-                      onChange={(e) => setPhotoCount(Math.max(1, Number(e.target.value) || 1))}
-                      className="w-20"
-                    />
-                  )}
-                </div>
+          <div className="flex items-center gap-3">
+            <input
+              id="photoRequired"
+              type="checkbox"
+              checked={photoRequired}
+              onChange={(e) => setPhotoRequired(e.target.checked)}
+            />
+            <Label htmlFor="photoRequired">Photo required</Label>
+            {photoRequired && (
+              <Input
+                className="ml-3 w-24"
+                type="number"
+                min={1}
+                max={10}
+                value={photoCount}
+                onChange={(e) => setPhotoCount(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+              />
+            )}
+          </div>
 
-                {/* Recurrence Options */}
-                <div>
-                  <label className="block mb-1">Recurrence</label>
-                  <Select
-                    value={recurrence?.frequency || ""}
-                    onValueChange={(v) =>
-                      setRecurrence(
-                        v ? { frequency: v as Recurrence["frequency"], interval: 1, count: 1 } : null
-                      )
-                    }
-                  >
-                    <SelectItem value="">None</SelectItem>
-                    <SelectItem value="daily">Daily</SelectItem>
-                    <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                  </Select>
+          {/* Recurrence (optional) – keep it simple */}
+          {/* You can remove this block if you don't need recurrence in UI yet */}
 
-                  {recurrence && (
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm mb-1">Interval</label>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={recurrence.interval ?? 1}
-                          onChange={(e) =>
-                            setRecurrence((r) =>
-                              r ? { ...r, interval: Math.max(1, Number(e.target.value) || 1) } : null
-                            )
-                          }
-                        />
-                        <p className="text-xs text-gray-500 mt-1">
-                          Every N{" "}
-                          {recurrence.frequency === "monthly"
-                            ? "months"
-                            : recurrence.frequency === "weekly"
-                            ? "weeks"
-                            : "days"}
-                        </p>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm mb-1">Count</label>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={recurrence.count ?? 1}
-                          onChange={(e) =>
-                            setRecurrence((r) =>
-                              r ? { ...r, count: Math.max(1, Number(e.target.value) || 1) } : null
-                            )
-                          }
-                        />
-                        <p className="text-xs text-gray-500 mt-1">Total occurrences</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <DialogFooter>
-                <Button variant="secondary" onClick={onClose}>
-                  Cancel
-                </Button>
-                <Button variant="default" disabled={loading} onClick={handleSubmit}>
-                  {loading ? "Creating..." : "Create"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        );
-      }
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button variant="default" onClick={handleCreate} disabled={loading}>
+              {loading ? "Creating..." : "Create Task"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

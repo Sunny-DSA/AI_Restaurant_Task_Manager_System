@@ -1,5 +1,48 @@
 // client/src/lib/api.ts
-import { apiRequest } from "./queryClient";
+
+/* =========
+   Small HTTP helper
+   ========= */
+
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+/**
+ * Same-origin fetch with cookies enabled, JSON in/out with useful errors.
+ * Always call with a relative URL like "/api/..." so the Vite proxy works.
+ */
+export async function apiRequest<T = any>(
+  method: HttpMethod,
+  url: string,
+  body?: unknown
+): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    credentials: "include", // <-- REQUIRED for session cookies
+    headers:
+      body instanceof FormData
+        ? undefined
+        : { "Content-Type": "application/json" },
+    body:
+      body === undefined
+        ? undefined
+        : body instanceof FormData
+        ? body
+        : JSON.stringify(body),
+  });
+
+  // Try to parse JSON even on errors, fall back to text
+  const text = await res.text();
+  const json = text ? (() => { try { return JSON.parse(text); } catch { return undefined; } })() : undefined;
+
+  if (!res.ok) {
+    const msg =
+      (json && (json.message || json.error)) ||
+      (text || `HTTP ${res.status}`);
+    throw new Error(msg);
+  }
+
+  return (json as T) ?? (undefined as T);
+}
 
 /* =========
    Types
@@ -12,30 +55,26 @@ export interface Task {
   title: string;
   description?: string;
 
-  // assignment/ownership
   assigneeType: string;
   assigneeId?: number;
   claimedBy?: number;
   completedBy?: number;
 
-  // status & timing
   status: string; // "pending" | "available" | "claimed" | "in_progress" | "completed" | "overdue"
-  priority: string; // "low" | "medium" | "high" (backend accepts string)
-  scheduledFor?: string; // ISO date-time
-  dueAt?: string;        // ISO date-time
+  priority: string; // "low" | "medium" | "high"
+  scheduledFor?: string;
+  dueAt?: string;
   claimedAt?: string;
   startedAt?: string;
   completedAt?: string;
 
-  // durations & photos
   estimatedDuration?: number;
   actualDuration?: number;
   photoRequired: boolean;
   photoCount: number;
   photosUploaded: number;
 
-  // per-task geofence (optional override of store fence)
-  geoLat?: string | null;      // decimals come back as strings from PG
+  geoLat?: string | null;
   geoLng?: string | null;
   geoRadiusM?: number | null;
 
@@ -91,8 +130,8 @@ export interface UserStats {
 
 export type RecurrencePayload = {
   frequency: "daily" | "weekly" | "monthly";
-  interval?: number; // default 1
-  count?: number;    // default 1
+  interval?: number;
+  count?: number;
 };
 
 export type CreateTaskPayload = {
@@ -100,7 +139,7 @@ export type CreateTaskPayload = {
   description?: string;
   storeId: number;
   assigneeId?: number;
-  assigneeType?: string; // server will default if omitted
+  assigneeType?: string;
   priority?: "low" | "medium" | "high";
   scheduledFor?: string | Date;
   dueAt?: string | Date;
@@ -108,12 +147,10 @@ export type CreateTaskPayload = {
   photoRequired?: boolean;
   photoCount?: number;
 
-  // optional per-task geofence override
   geoLat?: number;
   geoLng?: number;
   geoRadiusM?: number;
 
-  // recurrence
   recurrence?: RecurrencePayload;
 };
 
@@ -139,10 +176,8 @@ type Coords = { latitude: number; longitude: number };
    Helpers
    ========= */
 
-const toIsoIfDate = (v: unknown): unknown => {
-  if (v instanceof Date) return v.toISOString();
-  return v;
-};
+const toIsoIfDate = (v: unknown): unknown =>
+  v instanceof Date ? v.toISOString() : v;
 
 /* =========
    API
@@ -153,75 +188,64 @@ export const taskApi = {
     storeId?: number;
     status?: string;
     assigneeId?: number;
-    scheduledDate?: Date | string; // optional convenience filter if your backend supports it
+    scheduledDate?: Date | string;
   }): Promise<Task[]> {
     const params = new URLSearchParams();
     if (filters?.storeId) params.append("storeId", String(filters.storeId));
     if (filters?.status) params.append("status", filters.status);
     if (filters?.assigneeId) params.append("assigneeId", String(filters.assigneeId));
     if (filters?.scheduledDate) {
-      const val =
+      const v =
         filters.scheduledDate instanceof Date
           ? filters.scheduledDate.toISOString()
           : String(filters.scheduledDate);
-      params.append("scheduledDate", val);
+      params.append("scheduledDate", v);
     }
-
-    const res = await apiRequest("GET", `/api/tasks?${params.toString()}`);
-    return res.json();
+    return apiRequest<Task[]>("GET", `/api/tasks?${params.toString()}`);
   },
 
-  async getMyTasks(): Promise<Task[]> {
-    const res = await apiRequest("GET", "/api/tasks/my");
-    return res.json();
+  getMyTasks(): Promise<Task[]> {
+    return apiRequest<Task[]>("GET", "/api/tasks/my");
   },
 
-  async getAvailableTasks(storeId?: number): Promise<Task[]> {
+  getAvailableTasks(storeId?: number): Promise<Task[]> {
     const params = storeId ? `?storeId=${storeId}` : "";
-    const res = await apiRequest("GET", `/api/tasks/available${params}`);
-    return res.json();
+    return apiRequest<Task[]>("GET", `/api/tasks/available${params}`);
   },
 
-  async claimTask(taskId: number, location?: Coords): Promise<Task> {
-    const res = await apiRequest("POST", `/api/tasks/${taskId}/claim`, location);
-    return res.json();
+  claimTask(taskId: number, location?: Coords): Promise<Task> {
+    return apiRequest<Task>("POST", `/api/tasks/${taskId}/claim`, location);
   },
 
-  async transferTask(taskId: number, toUserId: number, reason?: string): Promise<any> {
-    const res = await apiRequest("POST", `/api/tasks/${taskId}/transfer`, { toUserId, reason });
-    return res.json();
+  transferTask(taskId: number, toUserId: number, reason?: string): Promise<any> {
+    return apiRequest("POST", `/api/tasks/${taskId}/transfer`, { toUserId, reason });
   },
 
-  async completeTask(
+  completeTask(
     taskId: number,
     options?: { notes?: string; forceComplete?: boolean; overridePhotoRequirement?: boolean }
   ): Promise<Task> {
-    const res = await apiRequest("POST", `/api/tasks/${taskId}/complete`, options ?? {});
-    return res.json();
+    return apiRequest<Task>("POST", `/api/tasks/${taskId}/complete`, options ?? {});
   },
 
-  async createTask(taskData: CreateTaskPayload): Promise<Task | Task[]> {
-    // Coerce possible Date fields to ISO for safety
+  createTask(taskData: CreateTaskPayload): Promise<Task | Task[]> {
     const body = {
       ...taskData,
       scheduledFor: toIsoIfDate(taskData.scheduledFor),
       dueAt: toIsoIfDate(taskData.dueAt),
     };
-    const res = await apiRequest("POST", "/api/tasks", body);
-    return res.json();
+    return apiRequest<Task | Task[]>("POST", "/api/tasks", body);
   },
 
-  async updateTask(taskId: number, taskData: UpdateTaskPayload): Promise<Task> {
+  updateTask(taskId: number, taskData: UpdateTaskPayload): Promise<Task> {
     const body: Record<string, unknown> = { ...taskData };
     if (body.scheduledFor) body.scheduledFor = toIsoIfDate(body.scheduledFor);
     if (body.dueAt) body.dueAt = toIsoIfDate(body.dueAt);
-
-    const res = await apiRequest("PUT", `/api/tasks/${taskId}`, body);
-    return res.json();
+    return apiRequest<Task>("PUT", `/api/tasks/${taskId}`, body);
   },
 
-  async deleteTask(taskId: number): Promise<void> {
-    await apiRequest("DELETE", `/api/tasks/${taskId}`);
+  deleteTask(taskId: number): Promise<void> {
+    return apiRequest<void>("DELETE", `/api/tasks/${taskId}`);
   },
 
   async uploadPhoto(
@@ -230,92 +254,63 @@ export const taskApi = {
     location?: Coords,
     taskItemId?: number
   ): Promise<any> {
-    const formData = new FormData();
-    formData.append("photo", file);
+    const form = new FormData();
+    form.append("photo", file);
     if (location) {
-      formData.append("latitude", String(location.latitude));
-      formData.append("longitude", String(location.longitude));
+      form.append("latitude", String(location.latitude));
+      form.append("longitude", String(location.longitude));
     }
-    if (taskItemId) formData.append("taskItemId", String(taskItemId));
+    if (taskItemId) form.append("taskItemId", String(taskItemId));
 
-    const res = await fetch(`/api/tasks/${taskId}/photos`, {
-      method: "POST",
-      body: formData,
-      credentials: "include",
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`${res.status}: ${text}`);
-    }
-    return res.json();
+    // Use apiRequest so cookies are included and errors are uniform
+    return apiRequest("POST", `/api/tasks/${taskId}/photos`, form);
   },
 };
 
 export const storeApi = {
-  async getStores(): Promise<Store[]> {
-    const res = await apiRequest("GET", "/api/stores");
-    return res.json();
+  getStores(): Promise<Store[]> {
+    return apiRequest<Store[]>("GET", "/api/stores");
   },
-
-  async getStore(id: number): Promise<Store> {
-    const res = await apiRequest("GET", `/api/stores/${id}`);
-    return res.json();
+  getStore(id: number): Promise<Store> {
+    return apiRequest<Store>("GET", `/api/stores/${id}`);
   },
-
-  async createStore(storeData: Partial<Store>): Promise<Store> {
-    const res = await apiRequest("POST", "/api/stores", storeData);
-    return res.json();
+  createStore(storeData: Partial<Store>): Promise<Store> {
+    return apiRequest<Store>("POST", "/api/stores", storeData);
   },
-
-  async updateStore(id: number, updates: Partial<Store>): Promise<Store> {
-    const res = await apiRequest("PUT", `/api/stores/${id}`, updates);
-    return res.json();
+  updateStore(id: number, updates: Partial<Store>): Promise<Store> {
+    return apiRequest<Store>("PUT", `/api/stores/${id}`, updates);
   },
-
-  async generateQR(storeId: number): Promise<{ qrCode: string }> {
-    const res = await apiRequest("POST", `/api/stores/${storeId}/generate-qr`);
-    return res.json();
+  generateQR(storeId: number): Promise<{ qrCode: string }> {
+    return apiRequest<{ qrCode: string }>("POST", `/api/stores/${storeId}/generate-qr`);
   },
-
-  async getStoreStats(storeId: number): Promise<TaskStats & UserStats> {
-    const res = await apiRequest("GET", `/api/stores/${storeId}/stats`);
-    return res.json();
+  getStoreStats(storeId: number): Promise<TaskStats & UserStats> {
+    return apiRequest<TaskStats & UserStats>("GET", `/api/stores/${storeId}/stats`);
   },
 };
 
 export const userApi = {
-  async getUsers(storeId?: number): Promise<User[]> {
+  getUsers(storeId?: number): Promise<User[]> {
     const params = storeId ? `?storeId=${storeId}` : "";
-    const res = await apiRequest("GET", `/api/users${params}`);
-    return res.json();
+    return apiRequest<User[]>("GET", `/api/users${params}`);
   },
-
-  async createUser(userData: Partial<User> & { password?: string }): Promise<User> {
-    const res = await apiRequest("POST", "/api/users", userData);
-    return res.json();
+  createUser(userData: Partial<User> & { password?: string }): Promise<User> {
+    return apiRequest<User>("POST", "/api/users", userData);
   },
-
-  async resetPin(userId: number): Promise<{ pin: string }> {
-    const res = await apiRequest("PUT", `/api/users/${userId}/reset-pin`);
-    return res.json();
+  resetPin(userId: number): Promise<{ pin: string }> {
+    return apiRequest<{ pin: string }>("PUT", `/api/users/${userId}/reset-pin`);
   },
 };
 
 export const analyticsApi = {
-  async getTaskStats(storeId?: number, dateFrom?: Date, dateTo?: Date): Promise<TaskStats> {
+  getTaskStats(storeId?: number, dateFrom?: Date, dateTo?: Date): Promise<TaskStats> {
     const params = new URLSearchParams();
     if (storeId) params.append("storeId", String(storeId));
     if (dateFrom) params.append("dateFrom", dateFrom.toISOString());
     if (dateTo) params.append("dateTo", dateTo.toISOString());
-
-    const res = await apiRequest("GET", `/api/analytics/tasks?${params.toString()}`);
-    return res.json();
+    return apiRequest<TaskStats>("GET", `/api/analytics/tasks?${params.toString()}`);
   },
-
-  async getUserStats(storeId?: number): Promise<UserStats> {
+  getUserStats(storeId?: number): Promise<UserStats> {
     const params = storeId ? `?storeId=${storeId}` : "";
-    const res = await apiRequest("GET", `/api/analytics/users${params}`);
-    return res.json();
+    return apiRequest<UserStats>("GET", `/api/analytics/users${params}`);
   },
 };

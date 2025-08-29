@@ -1,21 +1,11 @@
+// vite.config.ts
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
 export default defineConfig({
-  plugins: [
-    react(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
-      ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
-          ),
-        ]
-      : []),
-  ],
+  plugins: [react(), runtimeErrorOverlay()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -29,17 +19,26 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    host: true,
+    port: 5177,
+    strictPort: true,
+
+    // ✅ Option 1: allow all hosts in dev (easiest for Replit)
+   
+
+    // ✅ Option 2: OR specify your current Replit URL explicitly
+    // allowedHosts: ["9c05e64d-1c4d-440d-b4b2-b038fdd58e0b-00-2liewx1oqvb8k.riker.replit.dev"],
+
+    // (Optional) HMR behind HTTPS proxy like Replit
+    // hmr: { clientPort: 443 },
+
     proxy: {
-      // ✅ Forward all API requests to Express backend
-      "/api": {
-        target: "http://localhost:5000",
-        changeOrigin: true,
-      },
-      "/uploads": {
-        target: "http://localhost:5000",
-        changeOrigin: true,
-      },
+      "/api": { target: "http://localhost:5001", changeOrigin: true },
+      "/uploads": { target: "http://localhost:5001", changeOrigin: true },
     },
+    allowedHosts: [
+      "9c05e64d-1c4d-440d-b4b2-b038fdd58e0b-00-2liewx1oqvb8k.riker.replit.dev"
+    ],
     fs: {
       strict: true,
       deny: ["**/.*"],

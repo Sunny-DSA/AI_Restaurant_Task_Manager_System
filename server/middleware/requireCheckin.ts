@@ -1,10 +1,8 @@
-// server/middleware/requireCheckin.ts
 import type { Request, Response, NextFunction } from "express";
 
 type ActiveCheckin = {
   storeId: number;
   storeName?: string;
-  // snapshot of the store fence at check-in time
   fence?: { lat: number; lng: number; radiusM: number };
   startedAt: string;
 };
@@ -20,6 +18,6 @@ export function requireActiveCheckin(req: Request, res: Response, next: NextFunc
     return res.status(403).json({ message: "You must check in at the store first" });
   }
 
-  (req as any).activeCheckin = active; // make it available to the handler
+  (req as any).activeCheckin = active;
   next();
 }

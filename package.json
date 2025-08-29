@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "concurrently -k -n VITE,API -c cyan,magenta \"vite\" \"tsx watch server/index.ts\"",
-    "server": "tsx server/index.ts",
-    "build": "vite build",
-    "check": "tsc --noEmit"
+    "scripts": {
+      "dev": "tsx watch server/index.ts",
+      "build": "vite build",
+      "start": "NODE_ENV=production PORT=3000 tsx server/index.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "3.10.0",

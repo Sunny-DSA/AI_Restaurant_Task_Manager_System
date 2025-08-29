@@ -1,9 +1,8 @@
 // server/middleware/auth.ts
-import { Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import { haversineMeters } from "../utils/geo";
 
-// attachs req.user
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: number;
@@ -15,6 +14,7 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
+/** Populate req.user from the session userId */
 export const authenticateToken = async (
   req: AuthenticatedRequest,
   res: Response,
@@ -24,24 +24,27 @@ export const authenticateToken = async (
     const userId = (req.session as any)?.userId;
     if (!userId) return res.status(401).json({ message: "Authentication required" });
 
-    const user = await storage.getUser(userId);
-    if (!user || !user.isActive) return res.status(401).json({ message: "Invalid user" });
+    const user = await storage.getUser(Number(userId));
+    if (!user || !user.isActive) {
+      return res.status(401).json({ message: "Invalid user" });
+    }
 
     req.user = {
       id: user.id,
-      email: user.email || undefined,
-      firstName: user.firstName || undefined,
-      lastName: user.lastName || undefined,
+      email: user.email ?? undefined,
+      firstName: user.firstName ?? undefined,
+      lastName: user.lastName ?? undefined,
       role: user.role,
-      storeId: user.storeId || undefined,
+      storeId: user.storeId ?? undefined,
     };
     next();
-  } catch (error) {
-    console.error("Authentication error:", error);
+  } catch (err) {
+    console.error("Authentication error:", err);
     res.status(500).json({ message: "Authentication error" });
   }
 };
 
+/** Role gate */
 export const requireRole = (allowedRoles: string[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: "Authentication required" });
@@ -56,19 +59,19 @@ export const requireRole = (allowedRoles: string[]) => {
   };
 };
 
-// Optional helper if you still gate actions by store membership
-export const requireStore = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+/** Optional: ensure user belongs to a store unless master_admin */
+export const requireStore = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
   if (!req.user?.storeId && req.user?.role !== "master_admin") {
     return res.status(403).json({ message: "Store assignment required" });
   }
   next();
 };
 
-/**
- * Geofence validation middleware
- * Matches current schema.ts field names: latitude, longitude, geofenceRadius
- * Sends 400 if coords missing / store not configured; 403 if outside fence.
- */
+/** Optional: validate current location is within the store geofence */
 export const validateGeofence = async (
   req: AuthenticatedRequest,
   res: Response,
@@ -87,21 +90,17 @@ export const validateGeofence = async (
     const store = await storage.getStore(req.user.storeId);
     if (!store) return res.status(400).json({ message: "Store not found" });
 
-    // schema.ts: stores.latitude, stores.longitude are DECIMAL → often strings in JS; coerce to numbers
+    // DECIMALs often arrive as strings – coerce
     const lat =
-      store.latitude != null && store.latitude !== ""
-        ? Number(store.latitude)
-        : undefined;
+      store.latitude != null && store.latitude !== "" ? Number(store.latitude) : undefined;
     const lng =
-      store.longitude != null && store.longitude !== ""
-        ? Number(store.longitude)
-        : undefined;
+      store.longitude != null && store.longitude !== "" ? Number(store.longitude) : undefined;
     const radiusM =
       typeof store.geofenceRadius === "number"
         ? store.geofenceRadius
         : store.geofenceRadius != null
         ? Number(store.geofenceRadius)
-        : 100; // default 100m
+        : 100;
 
     if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
       return res.status(400).json({ message: "Store location not configured" });
@@ -117,8 +116,8 @@ export const validateGeofence = async (
     }
 
     next();
-  } catch (error) {
-    console.error("Geofence validation error:", error);
+  } catch (err) {
+    console.error("Geofence validation error:", err);
     res.status(500).json({ message: "Location validation error" });
   }
 };

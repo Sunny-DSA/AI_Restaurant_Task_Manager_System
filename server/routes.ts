@@ -6,6 +6,7 @@ import { requireActiveCheckin } from "./middleware/requireCheckin";
 import { upload } from "./middleware/upload";
 import { withinFence } from "./utils/geo";
 import { storage } from "./storage";
+import { AuthService } from "./services/authService";
 
 const router = Router();
 
@@ -17,20 +18,89 @@ router.get("/health", (_req, res) => {
 });
 
 /* =========================================
-   AUTH — QR + CHECK-IN / CHECK-OUT
-   (The login sets req.session.userId; we enrich req.user in auth middleware.)
+   AUTH
 ========================================= */
+
+/**
+ * POST /api/auth/login
+ * - Admin/manager: { email, password }
+ * - Store login:   { storeId, pin }
+ * Sets req.session.userId on success and returns a minimal user payload.
+ */
+router.post("/auth/login", async (req: Request, res: Response) => {
+  try {
+    const { email, password, storeId, pin } = req.body ?? {};
+
+    let user:
+      | {
+          id: number;
+          email?: string | null;
+          firstName?: string | null;
+          lastName?: string | null;
+          role: string;
+          storeId?: number | null;
+          isActive: boolean;
+        }
+      | null = null;
+
+    if (email && password) {
+      user = await AuthService.authenticateWithEmail(String(email), String(password));
+    } else if (storeId && pin) {
+      user = await AuthService.authenticateWithPin(String(pin), Number(storeId));
+    } else {
+      return res
+        .status(400)
+        .json({ message: "Provide either {email,password} or {storeId,pin}" });
+    }
+
+    // set session
+    (req.session as any).userId = user.id;
+
+    return res.json({
+      id: user.id,
+      email: user.email ?? undefined,
+      firstName: user.firstName ?? undefined,
+      lastName: user.lastName ?? undefined,
+      role: user.role,
+      storeId: user.storeId ?? undefined,
+    });
+  } catch (err: any) {
+    return res.status(401).json({ message: err?.message || "Invalid credentials" });
+  }
+});
+
+/**
+ * GET /api/auth/me
+ */
+router.get("/auth/me", authenticateToken, (req, res) => {
+  return res.json((req as any).user);
+});
+
+/**
+ * POST /api/auth/logout
+ */
+router.post("/auth/logout", (req, res) => {
+  try {
+    req.session?.destroy(() => {
+      // match cookie name configured in server/index.ts (name: "sid")
+      res.clearCookie("sid");
+      res.status(200).json({ ok: true });
+    });
+  } catch {
+    res.clearCookie("sid");
+    res.status(200).json({ ok: true });
+  }
+});
 
 /**
  * POST /api/auth/verify-qr
  * body: { qrData }
- * NOTE: Minimal verification (parsing only).
- * If you later sign QR payloads, call storage.getStore() and verify secret/expiry.
+ * Accepts simple JSON like: {"storeId":123}
  */
 router.post("/auth/verify-qr", async (req, res) => {
   try {
     const { qrData } = req.body ?? {};
-    const payload = JSON.parse(qrData);
+    const payload = JSON.parse(String(qrData || "{}"));
     const storeId = Number(payload?.storeId);
     if (!storeId) return res.status(400).json({ message: "Invalid QR" });
 
@@ -77,14 +147,17 @@ router.post("/auth/checkin", authenticateToken, async (req: Request, res: Respon
         }
       : undefined;
 
-  // persist to session + in-memory storage.activeCheckins (so TaskService can see it)
   (req as any).session.activeCheckin = {
     storeId: Number(storeId),
     storeName: store.name,
     fence: snapshotFence,
     startedAt: new Date().toISOString(),
   };
-  storage.setActiveCheckin(user.id, (req as any).session.activeCheckin);
+
+  // If your storage keeps an in-memory map for active checkins, expose a setter; else ignore:
+  if ((storage as any).setActiveCheckin) {
+    (storage as any).setActiveCheckin(user.id, (req as any).session.activeCheckin);
+  }
 
   res.json({ success: true });
 });
@@ -97,39 +170,86 @@ router.post("/auth/checkout", authenticateToken, async (req, res) => {
   if (!user?.id) return res.status(401).json({ message: "Unauthenticated" });
 
   (req as any).session.activeCheckin = undefined;
-  storage.clearActiveCheckin(user.id);
-
+  if ((storage as any).clearActiveCheckin) {
+    (storage as any).clearActiveCheckin(user.id);
+  }
   res.json({ success: true });
 });
 
+/* =========================================
+   USERS  (no storage.getUsers usage)
+========================================= */
 
 /**
- * GET /api/auth/me
- * Returns the currently authenticated user (via session).
+ * GET /api/users?storeId=#
+ * NOTE: Since your DatabaseStorage lacks getUsers, we derive a list from tasks
+ * and always include the current user. This compiles now and is enough for the UI
+ * (e.g. transfer dropdown) to have at least some users.
  */
-router.get("/auth/me", authenticateToken, (req, res) => {
-  // authenticateToken populates req.user
-  return res.json((req as any).user);
-});
+router.get("/users", authenticateToken, async (req, res) => {
+  const me = (req as any).user!;
+  const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
 
-/**
- * POST /api/auth/logout
- * Destroys the session and clears the cookie.
- */
-router.post("/auth/logout", (req, res) => {
-  try {
-    // If you're using a custom cookie name, replace "connect.sid"
-    const COOKIE = "connect.sid";
-    req.session?.destroy(() => {
-      res.clearCookie(COOKIE);
-      res.status(200).json({ ok: true });
-    });
-  } catch {
-    // Be resilient: clear cookie anyway
-    res.clearCookie("connect.sid");
-    res.status(200).json({ ok: true });
+  const resultMap = new Map<number, any>();
+
+  // Always include current user
+  const meFull = await storage.getUser(me.id);
+  if (meFull) resultMap.set(meFull.id, meFull);
+
+  // If a store is specified, gather users referenced by tasks in that store
+  if (storeId) {
+    const tasks = await storage.getTasks({ storeId });
+    for (const t of tasks) {
+      const ids = [t.assigneeId, t.claimedBy, t.completedBy].filter(
+        (v): v is number => typeof v === "number"
+      );
+      for (const uid of ids) {
+        if (!resultMap.has(uid)) {
+          const u = await storage.getUser(uid);
+          if (u) resultMap.set(u.id, u);
+        }
+      }
+    }
   }
+
+  res.json(Array.from(resultMap.values()));
 });
+
+/**
+ * POST /api/users
+ * Creates a user (delegates to AuthService.createUser).
+ */
+router.post(
+  "/users",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req, res) => {
+    try {
+      const created = await AuthService.createUser(req.body as any, req.body?.password);
+      res.json(created);
+    } catch (err: any) {
+      res.status(400).json({ message: err?.message || "Failed to create user" });
+    }
+  }
+);
+
+/**
+ * PUT /api/users/:id/reset-pin
+ */
+router.put(
+  "/users/:id/reset-pin",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const out = await AuthService.resetUserPin(id);
+      res.json(out);
+    } catch (err: any) {
+      res.status(400).json({ message: err?.message || "Failed to reset PIN" });
+    }
+  }
+);
 
 /* =========================================
    TASKS — LISTING
@@ -187,11 +307,6 @@ router.get("/tasks", authenticateToken, async (req, res) => {
    TASKS — CREATE / UPDATE / DELETE
 ========================================= */
 
-/**
- * POST /api/tasks
- * Only admin/store_manager can create.
- * Accepts only known columns to match schema (prevents Drizzle type errors).
- */
 router.post(
   "/tasks",
   authenticateToken,
@@ -208,7 +323,6 @@ router.post(
       return res.status(403).json({ message: "Cannot create tasks for another store" });
     }
 
-    // map body → schema-safe object
     const newTask = await storage.createTask({
       title: String(b.title),
       description: b.description ?? null,
@@ -222,7 +336,6 @@ router.post(
       estimatedDuration: b.estimatedDuration != null ? Number(b.estimatedDuration) : null,
       photoRequired: !!b.photoRequired,
       photoCount: b.photoCount != null ? Number(b.photoCount) : 1,
-      // per-task fence override (decimal in DB → pass string)
       geoLat: b.geoLat != null ? String(b.geoLat) : null,
       geoLng: b.geoLng != null ? String(b.geoLng) : null,
       geoRadiusM: b.geoRadiusM != null ? Number(b.geoRadiusM) : null,
@@ -233,10 +346,6 @@ router.post(
   }
 );
 
-/**
- * PUT /api/tasks/:id
- * Only admin/store_manager can edit.
- */
 router.put(
   "/tasks/:id",
   authenticateToken,
@@ -253,7 +362,6 @@ router.put(
       }
     }
 
-    // Build schema-safe update object (only known fields)
     const updates: any = {};
     if ("title" in patch) updates.title = patch.title ?? null;
     if ("description" in patch) updates.description = patch.description ?? null;
@@ -274,7 +382,8 @@ router.put(
     if ("photoCount" in patch) updates.photoCount = Number(patch.photoCount) || 1;
     if ("geoLat" in patch) updates.geoLat = patch.geoLat != null ? String(patch.geoLat) : null;
     if ("geoLng" in patch) updates.geoLng = patch.geoLng != null ? String(patch.geoLng) : null;
-    if ("geoRadiusM" in patch) updates.geoRadiusM = patch.geoRadiusM != null ? Number(patch.geoRadiusM) : null;
+    if ("geoRadiusM" in patch) updates.geoRadiusM =
+      patch.geoRadiusM != null ? Number(patch.geoRadiusM) : null;
     if ("notes" in patch) updates.notes = patch.notes ?? null;
 
     const updated = await storage.updateTask(id, updates);
@@ -282,9 +391,6 @@ router.put(
   }
 );
 
-/**
- * DELETE /api/tasks/:id
- */
 router.delete(
   "/tasks/:id",
   authenticateToken,
@@ -307,10 +413,6 @@ router.delete(
    TASKS — CLAIM / TRANSFER
 ========================================= */
 
-/**
- * POST /api/tasks/:id/claim
- * Employee claims a task (optional location in body).
- */
 router.post("/tasks/:id/claim", authenticateToken, async (req, res) => {
   const user = (req as any).user!;
   if (user.role !== roleEnum.EMPLOYEE) {
@@ -325,7 +427,7 @@ router.post("/tasks/:id/claim", authenticateToken, async (req, res) => {
     return res.status(403).json({ message: "Not your task" });
   }
 
-  // Optionally check location against activeCheckin fence
+  // Optional geofence check using active check-in
   const fence = (req as any).session?.activeCheckin?.fence as
     | { lat: number; lng: number; radiusM: number }
     | undefined;
@@ -343,11 +445,6 @@ router.post("/tasks/:id/claim", authenticateToken, async (req, res) => {
   res.json(updated);
 });
 
-/**
- * POST /api/tasks/:id/transfer
- * body: { toUserId, reason? }
- * Admin/Manager only
- */
 router.post(
   "/tasks/:id/transfer",
   authenticateToken,
@@ -365,6 +462,10 @@ router.post(
       return res.status(403).json({ message: "Forbidden" });
     }
 
+    // ensure target exists
+    const target = await storage.getUser(Number(toUserId));
+    if (!target) return res.status(404).json({ message: "Target user not found" });
+
     const updated = await storage.transferTask(id, user.id, Number(toUserId), req.body?.reason);
     res.json(updated);
   }
@@ -374,11 +475,6 @@ router.post(
    TASKS — PHOTO UPLOAD & COMPLETE (geofenced)
 ========================================= */
 
-/**
- * POST /api/tasks/:id/photos
- * multipart/form-data: "photo", optional "latitude", "longitude", "taskItemId"
- * Requires active check-in.
- */
 router.post(
   "/tasks/:id/photos",
   authenticateToken,
@@ -410,14 +506,15 @@ router.post(
 
       if (taskFence) {
         if (!point || !withinFence(point, { lat: taskFence.lat, lng: taskFence.lng }, taskFence.radiusM)) {
-          return res.status(403).json({ message: "Photo must be taken at the store (outside geofence)" });
+          return res.status(403).json({
+            message: "Photo must be taken at the store (outside geofence)",
+          });
         }
       }
 
       const f = req.file as Express.Multer.File | undefined;
       if (!f) return res.status(400).json({ message: "No photo uploaded" });
 
-      // URL that your frontend can access
       const url = `/uploads/${f.filename}`;
 
       await storage.createTaskPhoto({
@@ -442,11 +539,6 @@ router.post(
   }
 );
 
-/**
- * POST /api/tasks/:id/complete
- * body: { latitude?, longitude?, overridePhotoRequirement? }
- * Requires active check-in.
- */
 router.post(
   "/tasks/:id/complete",
   authenticateToken,
@@ -486,7 +578,9 @@ router.post(
 
       if (taskFence) {
         if (!point || !withinFence(point, { lat: taskFence.lat, lng: taskFence.lng }, taskFence.radiusM)) {
-          return res.status(403).json({ message: "Completion must occur at the store (outside geofence)" });
+          return res.status(403).json({
+            message: "Completion must occur at the store (outside geofence)",
+          });
         }
       }
 
