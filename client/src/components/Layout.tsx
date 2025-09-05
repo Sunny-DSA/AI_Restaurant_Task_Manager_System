@@ -6,8 +6,9 @@ import { canAccessPage } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Bell, Home, CheckSquare, List, Store, Users, BarChart3 } from "lucide-react";
+import { Bell, Home, CheckSquare, List, Store, Users, BarChart3, Settings } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
+import ThemeToggle from "@/components/ThemeToggle";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -24,21 +25,21 @@ const navigation = [
 
 export default function Layout({ children }: LayoutProps) {
   const [location] = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
   const { isConnected } = useWebSocket();
   const isMobile = useIsMobile();
+  const [showThemeToggle, setShowThemeToggle] = useState(false);
 
   if (!user) {
     return <div>{children}</div>;
   }
 
-  const filteredNavigation = navigation.filter(item => 
+  const filteredNavigation = navigation.filter((item) =>
     canAccessPage(user.role, item.key)
   );
 
   const getPageTitle = () => {
-    const currentPage = navigation.find(item => item.href === location);
+    const currentPage = navigation.find((item) => item.href === location);
     return currentPage?.name || "Dashboard";
   };
 
@@ -54,60 +55,49 @@ export default function Layout({ children }: LayoutProps) {
 
   const getRoleColor = () => {
     switch (user.role) {
-      case "master_admin": return "bg-purple-100 text-purple-700";
-      case "admin": return "bg-blue-100 text-blue-700";
-      case "store_manager": return "bg-green-100 text-green-700";
-      case "employee": return "bg-gray-100 text-gray-700";
-      default: return "bg-gray-100 text-gray-700";
+      case "master_admin":
+        return "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300";
+      case "admin":
+        return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300";
+      case "store_manager":
+        return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300";
+      case "employee":
+      default:
+        return "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-200";
     }
   };
 
-  const MobileNavigation = () => (
-    <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
-      <div className="flex justify-around py-2">
-        {filteredNavigation.slice(0, 4).map((item) => {
-          const isActive = location === item.href;
-          return (
-            <Link key={item.name} href={item.href}>
-              <button className={`flex flex-col items-center py-2 px-4 ${
-                isActive ? "text-primary" : "text-gray-500"
-              }`}>
-                <item.icon className="h-5 w-5 mb-1" />
-                <span className="text-xs font-medium">{item.name}</span>
-              </button>
-            </Link>
-          );
-        })}
-      </div>
-    </div>
-  );
-
-  const DesktopSidebar = () => (
-    <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0">
-      <div className="flex flex-col min-h-0 bg-white shadow-lg">
-        <div className="flex flex-col flex-grow pt-5 pb-4 overflow-y-auto">
-          <div className="flex items-center flex-shrink-0 px-4">
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+      {/* Sidebar */}
+      <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0">
+        <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 shadow-lg">
+          {/* App name/logo */}
+          <div className="flex items-center px-4 py-4">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
                 <Store className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">RestaurantTask</h1>
-                <p className="text-sm text-gray-500">Task Management</p>
+                <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">RestaurantTask</h1>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Task Management</p>
               </div>
             </div>
           </div>
 
+          {/* Nav links */}
           <nav className="mt-8 flex-1 px-4 space-y-2">
             {filteredNavigation.map((item) => {
               const isActive = location === item.href;
               return (
                 <Link key={item.name} href={item.href}>
-                  <button className={`w-full group flex items-center px-4 py-3 text-sm font-medium rounded-lg ${
-                    isActive
-                      ? "bg-primary-50 text-primary-700"
-                      : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-                  }`}>
+                  <button
+                    className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-lg ${
+                      isActive
+                        ? "bg-primary/10 text-primary"
+                        : "text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+                    }`}
+                  >
                     <item.icon className="mr-3 h-5 w-5" />
                     {item.name}
                   </button>
@@ -115,79 +105,97 @@ export default function Layout({ children }: LayoutProps) {
               );
             })}
           </nav>
-        </div>
 
-        <div className="flex-shrink-0 flex border-t border-gray-200 p-4">
-          <div className="flex items-center w-full">
-            <Avatar className="h-10 w-10">
-              <AvatarFallback>{getUserInitials()}</AvatarFallback>
-            </Avatar>
-            <div className="ml-3 flex-1">
-              <p className="text-sm font-medium text-gray-900">
-                {user.firstName || ""} {user.lastName || ""}
-              </p>
-              {user?.role && (
-                <Badge variant="secondary" className={`text-xs ${getRoleColor()}`}>
-                  {user.role.replace("_", " ")}
-                </Badge>
-              )}
+          {/* User footer */}
+          <div className="flex-shrink-0 flex border-t border-gray-200 dark:border-gray-800 p-4">
+            <div className="flex items-center w-full">
+              <Avatar className="h-10 w-10">
+                <AvatarFallback>{getUserInitials()}</AvatarFallback>
+              </Avatar>
+              <div className="ml-3 flex-1">
+                <p className="text-sm font-medium">{user.firstName} {user.lastName}</p>
+                {user?.role && (
+                  <Badge variant="secondary" className={`text-xs ${getRoleColor()}`}>
+                    {user.role.replace("_", " ")}
+                  </Badge>
+                )}
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => logout()} aria-label="Log out">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+              </Button>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => logout()}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
-            </Button>
           </div>
         </div>
-      </div>
-    </aside>
-  );
+      </aside>
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <DesktopSidebar />
+      {/* Main content */}
       <div className="md:pl-64 flex flex-col min-h-screen">
-        <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-40">
-          <div className="px-4 py-4 md:px-6">
-            <div className="flex items-center justify-between">
-              <div className="md:hidden">
-                <h1 className="text-xl font-bold text-gray-900">RestaurantTask</h1>
-              </div>
-              <div className="hidden md:block">
-                <h2 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h2>
-                <p className="text-gray-600">
-                  Welcome back, {user.firstName || "User"}
-                </p>
-              </div>
-              <div className="flex items-center space-x-4">
-                <div className={`w-2 h-2 rounded-full ${
+        <header className="bg-white dark:bg-gray-950 shadow-sm border-b border-gray-200 dark:border-gray-800 sticky top-0 z-40">
+          <div className="px-4 py-4 md:px-6 flex items-center justify-between">
+            <div className="hidden md:block">
+              <h2 className="text-2xl font-bold">{getPageTitle()}</h2>
+              <p className="text-gray-600 dark:text-gray-400">
+                Welcome back, {user.firstName || "User"}
+              </p>
+            </div>
+            <div className="flex items-center space-x-2 md:space-x-4">
+              <div
+                className={`w-2 h-2 rounded-full ${
                   isConnected ? "bg-green-500" : "bg-red-500"
-                }`} title={isConnected ? "Connected" : "Disconnected"} />
-                <Button variant="ghost" size="sm" className="relative">
-                  <Bell className="h-5 w-5" />
-                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
-                    3
-                  </span>
-                </Button>
-                <div className="md:hidden">
-                  <Avatar className="h-8 w-8">
-                    <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
-                  </Avatar>
-                </div>
+                }`}
+                title={isConnected ? "Connected" : "Disconnected"}
+              />
+              {/* Toggle button to reveal ThemeToggle */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowThemeToggle(!showThemeToggle)}
+                aria-label="Settings"
+              >
+                <Settings className="h-5 w-5" />
+              </Button>
+              {showThemeToggle && <ThemeToggle />}
+              <Button variant="ghost" size="sm" className="relative" aria-label="Notifications">
+                <Bell className="h-5 w-5" />
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
+                  3
+                </span>
+              </Button>
+              <div className="md:hidden">
+                <Avatar className="h-8 w-8">
+                  <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
+                </Avatar>
               </div>
             </div>
           </div>
         </header>
-        <main className="flex-1 pb-20 md:pb-0">
-          {children}
-        </main>
+
+        <main className="flex-1 pb-20 md:pb-0">{children}</main>
       </div>
-      {isMobile && <MobileNavigation />}
+
+      {isMobile && (
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 z-50">
+          <div className="flex justify-around py-2">
+            {filteredNavigation.slice(0, 4).map((item) => {
+              const isActive = location === item.href;
+              return (
+                <Link key={item.name} href={item.href}>
+                  <button
+                    className={`flex flex-col items-center py-2 px-4 ${
+                      isActive ? "text-primary" : "text-gray-500 dark:text-gray-400"
+                    }`}
+                  >
+                    <item.icon className="h-5 w-5 mb-1" />
+                    <span className="text-xs font-medium">{item.name}</span>
+                  </button>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

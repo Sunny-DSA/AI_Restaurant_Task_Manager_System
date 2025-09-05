@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useCallback, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "wouter";
@@ -9,25 +7,35 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LogIn, Store } from "lucide-react";
+import { LogIn, Store, Eye, EyeOff, QrCode } from "lucide-react";
+import QRScanner from "@/components/QRScanner";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function LoginPage() {
   const { login, isLoggingIn, isAuthenticated } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const [tab, setTab] = useState<"admin" | "store">("admin");
+
+  const [tab, setTab] = useState<"store" | "admin">("store");
+
+  // Admin creds
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [rememberAdmin, setRememberAdmin] = useState(true);
+
+  // Store/Employee creds
   const [storeId, setStoreId] = useState("");
   const [pin, setPin] = useState("");
+  const [rememberStore, setRememberStore] = useState(true);
+  const [showQR, setShowQR] = useState(false);
 
-  // Redirect if already authenticated
+  // Redirect after successful auth
   useEffect(() => {
-    if (isAuthenticated) {
-      setLocation("/", { replace: true });
-    }
+    if (isAuthenticated) setLocation("/"); // Dashboard is at "/"
   }, [isAuthenticated, setLocation]);
 
+  // Clear unrelated fields when switching tabs
   useEffect(() => {
     if (tab === "admin") {
       setStoreId("");
@@ -38,64 +46,101 @@ export default function LoginPage() {
     }
   }, [tab]);
 
+  // --- Error sanitizer: always show a friendly sentence in the toast ---
+  const friendly = (err: unknown, fallback = "Login failed. Please try again.") => {
+    const raw =
+      err && typeof err === "object" && "message" in err
+        ? String((err as any).message)
+        : String(err ?? "");
+    // If it looks like: `401 Unauthorized: {"message":"..."}`
+    const jsonMatch = raw.match(/\{[\s\S]*\}$/);
+    if (jsonMatch) {
+      try {
+        const obj = JSON.parse(jsonMatch[0]);
+        if (obj && typeof obj.message === "string" && obj.message.trim()) {
+          return obj.message;
+        }
+      } catch {
+        // ignore JSON parse errors
+      }
+    }
+    // Strip leading "### Word:" status prefixes if present
+    const stripped = raw.replace(/^\s*\d{3}\s+[A-Za-z ]+:\s*/, "").trim();
+    if (stripped) return stripped;
+    return fallback;
+  };
+
+  const showError = (e: unknown, title = "Login failed") =>
+    toast({ title, description: friendly(e), variant: "destructive" });
+
   const handleSubmit = useCallback(async () => {
     try {
       if (tab === "admin") {
         if (!email || !password) {
-          toast({
-            title: "Missing Credentials",
-            description: "Please enter both email and password",
+          return toast({
+            title: "Missing fields",
+            description: "Please enter both email and password.",
             variant: "destructive",
           });
-          return;
         }
-        await login({ email, password });
-        // Navigation will happen automatically via useEffect when isAuthenticated changes
-        toast({
-          title: "Login Successful",
-          description: "Welcome back!",
-        });
+        await login({ email, password, rememberMe: rememberAdmin });
       } else {
-        const sid = Number(storeId);
-        if (!sid || !pin) {
-          toast({
-            title: "Missing Credentials",
-            description: "Please enter both Store ID and PIN",
+        if (!storeId || !pin) {
+          return toast({
+            title: "Missing fields",
+            description: "Please enter both Store ID and PIN.",
             variant: "destructive",
           });
-          return;
         }
-        await login({ storeId: sid, pin });
-        toast({
-          title: "Login Successful",
-          description: "Welcome back!",
-        });
+
+        // Try to send geolocation so server can enforce fence
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            async (pos) => {
+              try {
+                await login({
+                  storeId: Number(storeId),
+                  pin,
+                  rememberMe: rememberStore,
+                  latitude: pos.coords.latitude,
+                  longitude: pos.coords.longitude,
+                });
+              } catch (e) {
+                showError(e);
+              }
+            },
+            async () => {
+              try {
+                await login({ storeId: Number(storeId), pin, rememberMe: rememberStore });
+              } catch (e) {
+                showError(e);
+              }
+            }
+          );
+          return; // prevent double submit fall-through
+        }
+
+        await login({ storeId: Number(storeId), pin, rememberMe: rememberStore });
       }
-    } catch (error: any) {
-      console.error("Login error:", error);
-      toast({
-        title: "Login Failed",
-        description: error.message || "Invalid credentials. Please try again.",
-        variant: "destructive",
-      });
+    } catch (e) {
+      showError(e);
     }
-  }, [tab, email, password, storeId, pin, login, toast]);
+  }, [tab, email, password, rememberAdmin, storeId, pin, rememberStore, login, toast]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="max-w-md w-full space-y-6">
-        <div className="text-center space-y-2">
-          <div className="w-16 h-16 mx-auto bg-primary-600 rounded-xl flex items-center justify-center shadow-lg">
-            <Store className="text-white w-8 h-8" />
-          </div>
-          <h1 className="text-3xl font-bold">RestaurantTask</h1>
-          <p className="text-gray-500 text-sm">Task Management System</p>
-        </div>
+    <div className="relative min-h-screen flex items-center justify-center bg-background">
+      {/* Dark mode toggle on top-right */}
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
 
-        <Card className="bg-white border border-gray-200 shadow-sm">
+      <div className="w-full max-w-md px-4">
+        <Card>
           <CardHeader>
-            <CardTitle>Welcome Back</CardTitle>
-            <CardDescription>Login to continue</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              <Store className="w-5 h-5" /> Login
+            </CardTitle>
+            <CardDescription>Choose your login type</CardDescription>
           </CardHeader>
 
           <form
@@ -106,7 +151,7 @@ export default function LoginPage() {
           >
             <CardContent className="space-y-4">
               <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
-                <TabsList className="grid w-full grid-cols-2 bg-gray-100">
+                <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="store">Store Login</TabsTrigger>
                   <TabsTrigger value="admin">Admin Login</TabsTrigger>
                 </TabsList>
@@ -120,8 +165,28 @@ export default function LoginPage() {
                   </div>
                   <div>
                     <Label htmlFor="password">Password</Label>
-                    <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                    <div className="relative">
+                      <Input
+                        id="password"
+                        type={showPw ? "text" : "password"}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="pr-10"
+                      />
+                      <button
+                        type="button"
+                        className="absolute inset-y-0 right-2 flex items-center"
+                        onClick={() => setShowPw((s) => !s)}
+                        aria-label={showPw ? "Hide password" : "Show password"}
+                      >
+                        {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={rememberAdmin} onChange={(e) => setRememberAdmin(e.target.checked)} />
+                    Remember me
+                  </label>
                 </>
               ) : (
                 <>
@@ -133,13 +198,35 @@ export default function LoginPage() {
                     <Label htmlFor="pin">Employee PIN</Label>
                     <Input id="pin" value={pin} onChange={(e) => setPin(e.target.value)} inputMode="numeric" />
                   </div>
+
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={rememberStore} onChange={(e) => setRememberStore(e.target.checked)} />
+                      Remember me
+                    </label>
+                    <Button type="button" variant="outline" onClick={() => setShowQR(true)}>
+                      <QrCode className="w-4 h-4 mr-2" />
+                      Scan QR
+                    </Button>
+                  </div>
+
+                  <QRScanner
+                    isOpen={showQR}
+                    onClose={() => setShowQR(false)}
+                    onSuccess={(scannedStoreId) => setStoreId(String(scannedStoreId))}
+                  />
                 </>
               )}
             </CardContent>
 
             <CardFooter className="flex flex-col space-y-4">
               <Button type="submit" className="w-full" disabled={isLoggingIn}>
-                {isLoggingIn ? "Logging in..." : <><LogIn className="w-4 h-4 mr-2" />Login</>}
+                {isLoggingIn ? "Logging in..." : (
+                  <>
+                    <LogIn className="w-4 h-4 mr-2" />
+                    Login
+                  </>
+                )}
               </Button>
             </CardFooter>
           </form>

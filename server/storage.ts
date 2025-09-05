@@ -1,4 +1,3 @@
-// server/storage.ts
 import { db } from "./db";
 import {
   users,
@@ -12,7 +11,9 @@ import {
   notifications,
   checkIns,
   taskStatusEnum,
+  storeAssignments, 
 } from "@shared/schema";
+
 import { and, or, eq, isNull, gte, lte, desc, asc, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
@@ -67,12 +68,14 @@ export interface IStorage {
   updateTaskTemplate(id: number, updates: Partial<any>): Promise<any>;
 
   // Task lists
-  getTaskLists(): Promise<any[]>;
+  getTaskLists(filters?: { storeId?: number; includeInactive?: boolean }): Promise<any[]>;
   getTaskList(id: number): Promise<any | undefined>;
   createTaskList(listData: any): Promise<any>;
   updateTaskList(id: number, listData: any): Promise<any>;
   deleteTaskList(id: number): Promise<boolean>;
   duplicateTaskList(id: number, createdBy: number): Promise<any>;
+  getAllTaskLists?(): Promise<any[]>; // optional convenience used by routes
+
 
   // Tasks
   getTask(id: number): Promise<any | undefined>;
@@ -271,11 +274,49 @@ export class DatabaseStorage implements IStorage {
   }
 
   /* ---------- Task Lists ---------- */
-  async getTaskLists() {
+  async getTaskLists(filters?: { storeId?: number; includeInactive?: boolean }) {
+    const byStore = filters?.storeId != null;
+    const onlyActive = !filters?.includeInactive;
+
+    if (byStore) {
+      // Join through store_assignments for entityType='list'
+      const rows = await db
+        .select({ list: taskLists })
+        .from(taskLists)
+        .innerJoin(
+          storeAssignments,
+          and(
+            eq(storeAssignments.entityType, "list"),
+            eq(storeAssignments.entityId, taskLists.id),
+            eq(storeAssignments.storeId, Number(filters!.storeId)),
+            eq((storeAssignments as any).isActive ?? storeAssignments.entityId, true as any)
+          )
+        )
+        .where(
+          onlyActive && (taskLists as any).isActive
+            ? eq((taskLists as any).isActive, true)
+            : undefined
+        )
+        .orderBy((taskLists as any).name ?? (taskLists as any).id);
+
+      return rows.map((r: any) => r.list);
+    }
+
+    // No store filter: return all (optionally only active)
     return await db
       .select()
       .from(taskLists)
-      .orderBy(taskLists.name);
+      .where(
+        onlyActive && (taskLists as any).isActive
+          ? eq((taskLists as any).isActive, true)
+          : undefined
+      )
+      .orderBy((taskLists as any).name ?? (taskLists as any).id);
+  }
+
+  // Optional convenience
+  async getAllTaskLists() {
+    return this.getTaskLists({ includeInactive: false });
   }
 
   async getTaskList(id: number) {
@@ -284,39 +325,97 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTaskList(listData: any) {
-    const arr = await returningArray(
-      db.insert(taskLists as any).values(listData as any).returning()
+    const values: any = { ...listData };
+    if (values.title && !values.name) values.name = values.title;
+
+    // Remove storeId from direct insert; it belongs in store_assignments
+    const storeId = values.storeId;
+    delete values.storeId;
+
+    const createdArr = await returningArray(
+      db.insert(taskLists as any).values(values as any).returning()
     );
-    return arr[0];
+    const created = createdArr[0];
+
+    // If a store was provided, link it
+    if (storeId != null) {
+      await db
+        .insert(storeAssignments as any)
+        .values({
+          entityType: "list",
+          entityId: created.id,
+          storeId: Number(storeId),
+          isActive: true,
+        } as any)
+        .returning();
+    }
+
+    return created;
   }
 
   async updateTaskList(id: number, listData: any) {
-    const arr = await returningArray(
-      db
-        .update(taskLists as any)
-        .set(listData as any)
-        .where(eq(taskLists.id, id))
-        .returning()
+    const patch: any = { ...listData };
+    if (patch.title && !patch.name) patch.name = patch.title;
+
+    // Pull storeId out to manage store_assignments separately
+    const nextStoreId = patch.storeId;
+    delete patch.storeId;
+
+    const updatedArr = await returningArray(
+      db.update(taskLists as any).set(patch as any).where(eq(taskLists.id, id)).returning()
     );
-    return arr[0];
+    const updated = updatedArr[0];
+
+    // If storeId provided, re-point the assignment to that store
+    if (nextStoreId != null) {
+      // Deactivate any existing assignments for this list
+      await db
+        .update(storeAssignments as any)
+        .set({ isActive: false } as any)
+        .where(and(eq(storeAssignments.entityType, "list"), eq(storeAssignments.entityId, id)));
+
+      // Create new active assignment
+      await db
+        .insert(storeAssignments as any)
+        .values({
+          entityType: "list",
+          entityId: id,
+          storeId: Number(nextStoreId),
+          isActive: true,
+        } as any)
+        .returning();
+    }
+
+    return updated;
   }
 
   async deleteTaskList(id: number) {
-    // Soft delete (recommended)
-    const arr = await returningArray(
-      db
+    // Soft delete the list if supported
+    if ((taskLists as any).isActive) {
+      await db
         .update(taskLists as any)
         .set({ isActive: false } as any)
         .where(eq(taskLists.id, id))
-        .returning()
-    );
-    return arr.length > 0;
+        .returning();
+    } else {
+      await db.delete(taskLists).where(eq(taskLists.id, id)).returning();
+    }
+
+    // Deactivate store assignments
+    await db
+      .update(storeAssignments as any)
+      .set({ isActive: false } as any)
+      .where(and(eq(storeAssignments.entityType, "list"), eq(storeAssignments.entityId, id)));
+
+    return true;
   }
 
   async duplicateTaskList(id: number, createdBy: number) {
     const original = await this.getTaskList(id);
     if (!original) throw new Error("Task list not found");
-    const arr = await returningArray(
+
+    // Create the copy
+    const copyArr = await returningArray(
       db
         .insert(taskLists as any)
         .values({
@@ -327,11 +426,42 @@ export class DatabaseStorage implements IStorage {
           recurrenceType: (original as any).recurrenceType ?? null,
           recurrencePattern: (original as any).recurrencePattern ?? null,
           createdBy,
+          isActive: true,
         } as any)
         .returning()
     );
-    return arr[0];
+    const copy = copyArr[0];
+
+    // Copy active store assignments
+    const assigns = await db
+      .select()
+      .from(storeAssignments)
+      .where(
+        and(
+          eq(storeAssignments.entityType, "list"),
+          eq(storeAssignments.entityId, id),
+          eq((storeAssignments as any).isActive ?? storeAssignments.entityId, true as any)
+        )
+      );
+
+    if (assigns.length) {
+      await db
+        .insert(storeAssignments as any)
+        .values(
+          assigns.map((a: any) => ({
+            entityType: "list",
+            entityId: copy.id,
+            storeId: a.storeId,
+            isActive: true,
+          })) as any
+        )
+        .returning();
+    }
+
+    return copy;
   }
+
+
 
   /* ---------- Tasks ---------- */
   async getTask(id: number) {

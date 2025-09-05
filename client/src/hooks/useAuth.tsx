@@ -12,8 +12,8 @@ type User = {
 };
 
 type LoginArgs =
-  | { email: string; password: string } // admin
-  | { storeId: number; pin: string };   // store employee
+  | { email: string; password: string; rememberMe?: boolean }
+  | { storeId: number; pin: string; rememberMe?: boolean; latitude?: number; longitude?: number };
 
 type VerifyQRArgs = { qrData: string };
 
@@ -55,13 +55,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoggingIn(true);
     try {
       const res = await apiRequest("POST", "/api/auth/login", args);
-      const me = (await res.json()) as User;
-      setUser(me);
+      const data = await res.json();
+      setUser(data);
+      return data;
     } finally {
       setIsLoggingIn(false);
     }
   }, []);
-
   const verifyQR = useCallback(async (args: VerifyQRArgs) => {
     setIsVerifyingQR(true);
     try {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import { userApi } from "@/lib/api";
+import { userApi, storeApi } from "@/lib/api";
 import { hasPermission, roleDisplayNames, roleColors } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -35,42 +36,68 @@ import {
   Mail,
   Upload,
   Plus,
-  MoreHorizontal,
   Shield,
   Key,
 } from "lucide-react";
 
+/* -------------------------- validation (unchanged UI) -------------------------- */
 const userSchema = z.object({
-  email: z.string().email().optional(),
+  email: z
+    .preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().email()
+    )
+    .optional(),
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
   role: z.enum(["master_admin", "admin", "store_manager", "employee"]),
-  storeId: z.number().optional(),
+  // coerce "" | string -> number; allow undefined for non-store roles
+  storeId: z
+    .preprocess((v) => {
+      if (v === "" || v == null) return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : v;
+    }, z.number())
+    .optional(),
   password: z
-    .string()
-    .min(6, "Password must be at least 6 characters")
+    .preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().min(6, "Password must be at least 6 characters")
+    )
     .optional(),
 });
-
 type UserFormData = z.infer<typeof userSchema>;
 
 export default function Users() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
 
-  const canManageUsers = hasPermission(user?.role || "", "create", "users");
-  const canViewAllUsers =
-    user?.role === "master_admin" || user?.role === "admin";
+  // Manual PIN state
+  const [setPinManually, setSetPinManually] = useState(false);
+  const [manualPin, setManualPin] = useState("");
 
-  // Get users
+  // Store selection for admins creating store roles (when they themselves don't have a storeId)
+  const [selectedStoreId, setSelectedStoreId] = useState<number | undefined>(undefined);
+
+  const canManageUsers = hasPermission(user?.role || "", "create", "users");
+  const canViewAllUsers = user?.role === "master_admin" || user?.role === "admin";
+
+  // Users
   const { data: users = [] } = useQuery({
-    queryKey: ["/api/users", user?.storeId],
-    queryFn: () =>
-      userApi.getUsers(canViewAllUsers ? undefined : user?.storeId),
+    queryKey: ["/api/users", canViewAllUsers ? "all" : user?.storeId ?? "none"],
+    queryFn: () => userApi.getUsers(canViewAllUsers ? undefined : user?.storeId),
+    enabled: canManageUsers,
+  });
+
+  // Stores
+  const { data: stores = [] } = useQuery({
+    queryKey: ["/api/stores"],
+    queryFn: () => storeApi.getStores(),
     enabled: canManageUsers,
   });
 
@@ -86,97 +113,122 @@ export default function Users() {
     },
   });
 
-  const createUserMutation = useMutation({
-    mutationFn: userApi.createUser,
-    onSuccess: (newUser) => {
-      toast({
-        title: "User created successfully",
-        description: `${newUser.firstName} ${newUser.lastName} has been added`,
-      });
-      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
-      setShowCreateModal(false);
-      form.reset();
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Failed to create user",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
-
+  // Mutations
+  const createUserMutation = useMutation({ mutationFn: userApi.createUser });
   const resetPinMutation = useMutation({
     mutationFn: userApi.resetPin,
     onSuccess: (result) => {
-      toast({
-        title: "PIN reset successfully",
-        description: `New PIN: ${result.pin}`,
+      toast({ title: "PIN reset successfully", description: `New PIN: ${result.pin}` });
+      queryClient.invalidateQueries({
+        predicate: (q) => Array.isArray(q.queryKey) && q.queryKey[0] === "/api/users",
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
     },
     onError: (error: Error) => {
-      toast({
-        title: "Failed to reset PIN",
-        description: error.message,
-        variant: "destructive",
-      });
+      toast({ title: "Failed to reset PIN", description: error.message, variant: "destructive" });
     },
   });
 
-  const onSubmit = (data: UserFormData) => {
-    // Only include password for admin roles
-    const submitData = {
-      ...data,
-      password:
-        data.role === "master_admin" || data.role === "admin"
-          ? data.password
-          : undefined,
-    };
-    createUserMutation.mutate(submitData);
-  };
+  /* ------------------------------ submit (explicit) ----------------------------- */
+  const submitForm = async () => {
+    // always run (no native form submit)
+    const data = form.getValues(); // RHF state snapshot
+    const role = data.role;
+    const requiresStore = role === "employee" || role === "store_manager";
 
-  const getFilteredUsers = () => {
-    let filteredUsers = users;
+    const finalStoreId =
+      requiresStore ? (user?.storeId ?? selectedStoreId ?? data.storeId) : undefined;
 
-    // Apply role filter
-    if (roleFilter !== "all") {
-      filteredUsers = filteredUsers.filter((u) => u.role === roleFilter);
+    if (requiresStore && !finalStoreId) {
+      toast({
+        title: "Select a store",
+        description: "Employees and store managers must belong to a store.",
+        variant: "destructive",
+      });
+      return;
     }
 
-    // Apply search filter
+    let pinToSet: string | undefined;
+    if (setPinManually && requiresStore) {
+      const sanitized = (manualPin || "").replace(/\D/g, "").slice(0, 4);
+      if (!/^\d{4}$/.test(sanitized)) {
+        toast({ title: "PIN must be 4 digits", variant: "destructive" });
+        return;
+      }
+      pinToSet = sanitized;
+    }
+
+    const payload: any = {
+      ...data,
+      storeId: requiresStore ? Number(finalStoreId) : undefined,
+      password: role === "master_admin" || role === "admin" ? data.password : undefined,
+    };
+
+    try {
+      const newUser = await createUserMutation.mutateAsync(payload);
+
+      if (pinToSet) {
+        await userApi.setPin(newUser.id, pinToSet);
+        toast({ title: "User created", description: `PIN set to ${pinToSet}.` });
+      } else {
+        toast({
+          title: "User created successfully",
+          description: `${newUser.firstName} ${newUser.lastName} has been added`,
+        });
+      }
+
+      queryClient.invalidateQueries({
+        predicate: (q) => Array.isArray(q.queryKey) && q.queryKey[0] === "/api/users",
+      });
+
+      setShowCreateModal(false);
+      form.reset({
+        email: "",
+        firstName: "",
+        lastName: "",
+        role: "employee",
+        storeId: user?.storeId,
+        password: "",
+      });
+      setSetPinManually(false);
+      setManualPin("");
+      setSelectedStoreId(undefined);
+    } catch (error: any) {
+      toast({
+        title: "Failed to create user",
+        description: error?.message || "Please check the form and try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Filtering
+  const filteredUsers = (() => {
+    let out = users;
+    if (roleFilter !== "all") out = out.filter((u: any) => u.role === roleFilter);
     if (searchTerm) {
-      filteredUsers = filteredUsers.filter(
-        (u) =>
-          `${u.firstName} ${u.lastName}`
-            .toLowerCase()
-            .includes(searchTerm.toLowerCase()) ||
-          (u.email && u.email.toLowerCase().includes(searchTerm.toLowerCase())),
+      const q = searchTerm.toLowerCase();
+      out = out.filter(
+        (u: any) =>
+          `${u.firstName} ${u.lastName}`.toLowerCase().includes(q) ||
+          (u.email && u.email.toLowerCase().includes(q))
       );
     }
+    return out;
+  })();
 
-    return filteredUsers;
-  };
+  const getUserInitials = (u: any) =>
+    `${u.firstName?.[0] || ""}${u.lastName?.[0] || ""}`.toUpperCase();
 
-  const filteredUsers = getFilteredUsers();
-
-  const getUserInitials = (user: any) => {
-    return `${user.firstName?.[0] || ""}${user.lastName?.[0] || ""}`.toUpperCase();
-  };
-
-  const getUserStats = () => {
+  const stats = (() => {
     const totalUsers = users.length;
-    const activeUsers = users.filter((u) => u.isActive).length;
-    const recentUsers = users.filter((u) => {
+    const activeUsers = users.filter((u: any) => u.isActive).length;
+    const recentUsers = users.filter((u: any) => {
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
       return new Date(u.createdAt) > weekAgo;
     }).length;
-
     return { totalUsers, activeUsers, recentUsers };
-  };
-
-  const stats = getUserStats();
+  })();
 
   if (!canManageUsers) {
     return (
@@ -184,12 +236,9 @@ export default function Users() {
         <Card>
           <CardContent className="p-12 text-center">
             <Shield className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Access Restricted
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Access Restricted</h3>
             <p className="text-gray-600">
-              You don't have permission to manage users. Contact your
-              administrator if you need access.
+              You don't have permission to manage users. Contact your administrator if you need access.
             </p>
           </CardContent>
         </Card>
@@ -199,16 +248,14 @@ export default function Users() {
 
   return (
     <div className="p-4 md:p-6 space-y-6">
-      {/* User Stats */}
+      {/* Stats */}
       <div className="grid md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Users</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {stats.totalUsers}
-                </p>
+                <p className="text-2xl font-bold text-gray-900">{stats.totalUsers}</p>
               </div>
               <UsersIcon className="w-8 h-8 text-primary-600" />
             </div>
@@ -219,12 +266,8 @@ export default function Users() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">
-                  Active Users
-                </p>
-                <p className="text-2xl font-bold text-success-600">
-                  {stats.activeUsers}
-                </p>
+                <p className="text-sm font-medium text-gray-600">Active Users</p>
+                <p className="text-2xl font-bold text-success-600">{stats.activeUsers}</p>
               </div>
               <UserCheck className="w-8 h-8 text-success-600" />
             </div>
@@ -235,9 +278,7 @@ export default function Users() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">
-                  Pending Invites
-                </p>
+                <p className="text-sm font-medium text-gray-600">Pending Invites</p>
                 <p className="text-2xl font-bold text-warning-600">0</p>
               </div>
               <Watch className="w-8 h-8 text-warning-600" />
@@ -249,12 +290,8 @@ export default function Users() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">
-                  New This Week
-                </p>
-                <p className="text-2xl font-bold text-primary-600">
-                  {stats.recentUsers}
-                </p>
+                <p className="text-sm font-medium text-gray-600">New This Week</p>
+                <p className="text-2xl font-bold text-primary-600">{stats.recentUsers}</p>
               </div>
               <UserPlus className="w-8 h-8 text-primary-600" />
             </div>
@@ -262,7 +299,7 @@ export default function Users() {
         </Card>
       </div>
 
-      {/* User Management Actions */}
+      {/* Actions */}
       <Card>
         <CardContent className="p-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
@@ -309,7 +346,7 @@ export default function Users() {
         </CardContent>
       </Card>
 
-      {/* Users Table */}
+      {/* Table */}
       <Card>
         <CardHeader>
           <CardTitle>Team Members ({filteredUsers.length})</CardTitle>
@@ -338,67 +375,46 @@ export default function Users() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {filteredUsers.map((userItem) => (
-                    <tr key={userItem.id} className="hover:bg-gray-50">
+                  {filteredUsers.map((u: any) => (
+                    <tr key={u.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
                           <Avatar className="h-10 w-10 mr-4">
-                            <AvatarFallback>
-                              {getUserInitials(userItem)}
-                            </AvatarFallback>
+                            <AvatarFallback>{getUserInitials(u)}</AvatarFallback>
                           </Avatar>
                           <div>
                             <div className="text-sm font-medium text-gray-900">
-                              {userItem.firstName} {userItem.lastName}
+                              {u.firstName} {u.lastName}
                             </div>
-                            {userItem.email && (
-                              <div className="text-sm text-gray-500">
-                                {userItem.email}
-                              </div>
-                            )}
+                            {u.email && <div className="text-sm text-gray-500">{u.email}</div>}
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <Badge className={roleColors[userItem.role]}>
-                          {roleDisplayNames[userItem.role]}
-                        </Badge>
+                        <Badge className={roleColors[u.role]}>{roleDisplayNames[u.role]}</Badge>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
                           <div
                             className={`w-2 h-2 rounded-full mr-2 ${
-                              userItem.isActive
-                                ? "bg-success-500"
-                                : "bg-gray-400"
+                              u.isActive ? "bg-success-500" : "bg-gray-400"
                             }`}
                           />
-                          <span
-                            className={`text-sm ${
-                              userItem.isActive
-                                ? "text-success-600"
-                                : "text-gray-500"
-                            }`}
-                          >
-                            {userItem.isActive ? "Active" : "Inactive"}
+                          <span className={`text-sm ${u.isActive ? "text-success-600" : "text-gray-500"}`}>
+                            {u.isActive ? "Active" : "Inactive"}
                           </span>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {userItem.lastLogin
-                          ? new Date(userItem.lastLogin).toLocaleDateString()
-                          : "Never"}
+                        {u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : "Never"}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                        <Button variant="ghost" size="sm">
-                          Edit
-                        </Button>
-                        {(userItem.role === "store_manager" ||
-                          userItem.role === "employee") && (
+                        <Button variant="ghost" size="sm">Edit</Button>
+                        {(u.role === "store_manager" || u.role === "employee") && (
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => resetPinMutation.mutate(userItem.id)}
+                            onClick={() => resetPinMutation.mutate(u.id)}
                             disabled={resetPinMutation.isPending}
                           >
                             <Key className="w-4 h-4 mr-1" />
@@ -422,9 +438,7 @@ export default function Users() {
             <div className="text-center py-12">
               <UsersIcon className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                {searchTerm || roleFilter !== "all"
-                  ? "No users found"
-                  : "No users yet"}
+                {searchTerm || roleFilter !== "all" ? "No users found" : "No users yet"}
               </h3>
               <p className="text-gray-600 mb-6">
                 {searchTerm || roleFilter !== "all"
@@ -443,41 +457,48 @@ export default function Users() {
       </Card>
 
       {/* Create User Modal */}
-      <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
-        <DialogContent className="max-w-md">
+      <Dialog
+        open={showCreateModal}
+        onOpenChange={(open) => {
+          setShowCreateModal(open);
+          if (!open) {
+            form.reset({
+              email: "",
+              firstName: "",
+              lastName: "",
+              role: "employee",
+              storeId: user?.storeId,
+              password: "",
+            });
+            setSetPinManually(false);
+            setManualPin("");
+            setSelectedStoreId(undefined);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md" aria-describedby="add-user-desc">
           <DialogHeader>
             <DialogTitle>Add New User</DialogTitle>
+            <DialogDescription id="add-user-desc">
+              Create an employee, store manager, or admin.
+            </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          {/* form kept only for layout; we don't rely on native submit */}
+          <form id="create-user-form" noValidate onSubmit={(e) => e.preventDefault()} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="firstName">First Name</Label>
-                <Input
-                  id="firstName"
-                  {...form.register("firstName")}
-                  className="mt-1"
-                  placeholder="John"
-                />
+                <Input id="firstName" {...form.register("firstName")} className="mt-1" placeholder="John" />
                 {form.formState.errors.firstName && (
-                  <p className="text-sm text-destructive mt-1">
-                    {form.formState.errors.firstName.message}
-                  </p>
+                  <p className="text-sm text-destructive mt-1">{form.formState.errors.firstName.message}</p>
                 )}
               </div>
-
               <div>
                 <Label htmlFor="lastName">Last Name</Label>
-                <Input
-                  id="lastName"
-                  {...form.register("lastName")}
-                  className="mt-1"
-                  placeholder="Doe"
-                />
+                <Input id="lastName" {...form.register("lastName")} className="mt-1" placeholder="Doe" />
                 {form.formState.errors.lastName && (
-                  <p className="text-sm text-destructive mt-1">
-                    {form.formState.errors.lastName.message}
-                  </p>
+                  <p className="text-sm text-destructive mt-1">{form.formState.errors.lastName.message}</p>
                 )}
               </div>
             </div>
@@ -486,15 +507,16 @@ export default function Users() {
               <Label htmlFor="role">Role</Label>
               <Select
                 value={form.watch("role")}
-                onValueChange={(value: any) => form.setValue("role", value)}
+                onValueChange={(v: any) => {
+                  form.setValue("role", v, { shouldDirty: true, shouldValidate: false });
+                  if (v !== "admin" && v !== "master_admin") form.clearErrors("password");
+                }}
               >
                 <SelectTrigger className="mt-1">
                   <SelectValue placeholder="Select role" />
                 </SelectTrigger>
                 <SelectContent>
-                  {user?.role === "master_admin" && (
-                    <SelectItem value="admin">Admin</SelectItem>
-                  )}
+                  {user?.role === "master_admin" && <SelectItem value="admin">Admin</SelectItem>}
                   <SelectItem value="store_manager">Store Manager</SelectItem>
                   <SelectItem value="employee">Employee</SelectItem>
                 </SelectContent>
@@ -511,14 +533,11 @@ export default function Users() {
                 placeholder="john.doe@restaurant.com"
               />
               {form.formState.errors.email && (
-                <p className="text-sm text-destructive mt-1">
-                  {form.formState.errors.email.message}
-                </p>
+                <p className="text-sm text-destructive mt-1">{form.formState.errors.email.message}</p>
               )}
             </div>
 
-            {(form.watch("role") === "master_admin" ||
-              form.watch("role") === "admin") && (
+            {(form.watch("role") === "master_admin" || form.watch("role") === "admin") && (
               <div>
                 <Label htmlFor="password">Password</Label>
                 <Input
@@ -529,25 +548,70 @@ export default function Users() {
                   placeholder="Minimum 6 characters"
                 />
                 {form.formState.errors.password && (
-                  <p className="text-sm text-destructive mt-1">
-                    {form.formState.errors.password.message}
+                  <p className="text-sm text-destructive mt-1">{form.formState.errors.password.message}</p>
+                )}
+              </div>
+            )}
+
+            {(form.watch("role") === "store_manager" || form.watch("role") === "employee") && !user?.storeId && (
+              <div>
+                <Label>Store</Label>
+                <Select
+                  value={selectedStoreId ? String(selectedStoreId) : ""}
+                  onValueChange={(v) => setSelectedStoreId(Number(v))}
+                >
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="Select a store" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {stores.map((s: any) => (
+                      <SelectItem key={s.id} value={String(s.id)}>
+                        {s.name} (#{s.id})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Required for employees and store managers.
+                </p>
+              </div>
+            )}
+
+            {(form.watch("role") === "store_manager" || form.watch("role") === "employee") && (
+              <div className="rounded-lg border p-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={setPinManually}
+                    onChange={(e) => setSetPinManually(e.target.checked)}
+                  />
+                  Set 4-digit PIN manually
+                </label>
+
+                {setPinManually ? (
+                  <div>
+                    <Label>4-digit PIN</Label>
+                    <Input
+                      value={manualPin}
+                      onChange={(e) => setManualPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                      inputMode="numeric"
+                      maxLength={4}
+                      placeholder="e.g. 1234"
+                    />
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    A 4-digit PIN will be generated automatically if you don’t set one here.
                   </p>
                 )}
               </div>
             )}
 
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-              <p className="text-sm text-blue-800">
-                {form.watch("role") === "store_manager" ||
-                form.watch("role") === "employee"
-                  ? "A 4-digit PIN will be automatically generated for store access"
-                  : "This user will receive email login credentials"}
-              </p>
-            </div>
-
             <div className="flex space-x-3">
+              {/* key change: explicit click handler; no native submit */}
               <Button
-                type="submit"
+                type="button"
+                onClick={submitForm}
                 disabled={createUserMutation.isPending}
                 className="flex-1"
               >

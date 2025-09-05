@@ -37,6 +37,9 @@ export const authenticateToken = async (
       role: user.role,
       storeId: user.storeId ?? undefined,
     };
+    // make user available to views
+    res.locals.user = req.user;
+    
     next();
   } catch (err) {
     console.error("Authentication error:", err);

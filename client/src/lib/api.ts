@@ -17,11 +17,8 @@ export async function apiRequest<T = any>(
 ): Promise<T> {
   const res = await fetch(url, {
     method,
-    credentials: "include", // <-- REQUIRED for session cookies
-    headers:
-      body instanceof FormData
-        ? undefined
-        : { "Content-Type": "application/json" },
+    credentials: "include",
+    headers: body instanceof FormData ? undefined : { "Content-Type": "application/json" },
     body:
       body === undefined
         ? undefined
@@ -30,18 +27,41 @@ export async function apiRequest<T = any>(
         : JSON.stringify(body),
   });
 
-  // Try to parse JSON even on errors, fall back to text
-  const text = await res.text();
-  const json = text ? (() => { try { return JSON.parse(text); } catch { return undefined; } })() : undefined;
-
-  if (!res.ok) {
-    const msg =
-      (json && (json.message || json.error)) ||
-      (text || `HTTP ${res.status}`);
-    throw new Error(msg);
+  let payload: any;
+  try {
+    const text = await res.text();
+    payload = text ? JSON.parse(text) : undefined;
+  } catch {
+    payload = undefined;
   }
 
-  return (json as T) ?? (undefined as T);
+  if (!res.ok) {
+    const serverMsg =
+      typeof payload?.message === "string"
+        ? payload.message
+        : typeof payload?.error === "string"
+        ? payload.error
+        : undefined;
+
+    const fallbackByStatus: Record<number, string> = {
+      400: "Please check your input and try again.",
+      401: "Login failed. Please check your credentials.",
+      403: "You don’t have permission to do that.",
+      404: "We couldn’t find what you were looking for.",
+      422: "Some fields need attention.",
+      429: "Too many requests. Please try again shortly.",
+      500: "Something went wrong on our side. Please try again.",
+    };
+
+    const friendly =
+      serverMsg || fallbackByStatus[res.status] || "Something went wrong. Please try again.";
+
+    const error = new Error(friendly) as Error & { status?: number };
+    error.status = res.status;
+    throw error;
+  }
+
+  return (payload as T) ?? (undefined as T);
 }
 
 /* =========
@@ -299,6 +319,10 @@ export const userApi = {
   resetPin(userId: number): Promise<{ pin: string }> {
     return apiRequest<{ pin: string }>("PUT", `/api/users/${userId}/reset-pin`);
   },
+  // NEW: set exact 4-digit PIN (admin/manager only)
+  setPin(userId: number, pin: string) {
+    return apiRequest<{ ok: true }>("PUT", `/api/users/${userId}/pin`, { pin });
+  },
 };
 
 export const analyticsApi = {
@@ -312,5 +336,73 @@ export const analyticsApi = {
   getUserStats(storeId?: number): Promise<UserStats> {
     const params = storeId ? `?storeId=${storeId}` : "";
     return apiRequest<UserStats>("GET", `/api/analytics/users${params}`);
+  },
+};
+
+/* =========
+   Task Lists (NEW)
+   ========= */
+
+export interface TaskList {
+  id: number;
+  name: string;
+  description?: string | null;
+  createdBy: number;
+  recurrenceType?: string | null;
+  recurrencePattern?: string | null;
+  assigneeType: string; // "store_wide" | "manager" | "specific_employee"
+  assigneeId?: number | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CreateTaskListPayload = {
+  name: string;
+  description?: string;
+  storeId?: number; // optional; backend will infer for store managers
+  assigneeType?: string;
+  assigneeId?: number;
+  recurrenceType?: string;
+  recurrencePattern?: string;
+};
+
+export type UpdateTaskListPayload = Partial<CreateTaskListPayload> & {
+  name?: string; // allow rename specifically
+};
+
+export const taskListApi = {
+  getLists(): Promise<any[]> {
+    return apiRequest<any[]>("GET", "/api/task-lists");
+  },
+  createList(payload: any): Promise<any> {
+    return apiRequest<any>("POST", "/api/task-lists", payload);
+  },
+  deleteList(id: number): Promise<any> {
+    return apiRequest<any>("DELETE", `/api/task-lists/${id}`);
+  },
+  duplicateList(id: number): Promise<any> {
+    return apiRequest<any>("POST", `/api/task-lists/${id}/duplicate`);
+  },
+  import(payload: {
+    list: {
+      name: string;
+      description?: string;
+      assigneeType: "store_wide" | "manager" | "specific_employee";
+      assigneeId?: number;
+      recurrenceType?: "none" | "daily" | "weekly" | "monthly";
+      recurrencePattern?: string;
+    };
+    templates: Array<{
+      title: string;
+      description?: string;
+      photoRequired?: boolean;
+      photoCount?: number;
+      priority?: "low" | "normal" | "high";
+      items?: Array<{ title: string; description?: string; photoRequired?: boolean; sortOrder?: number }>;
+    }>;
+    assignToMyStore?: boolean;
+  }): Promise<{ success: true; listId: number }> {
+    return apiRequest("POST", "/api/task-lists/import", payload);
   },
 };

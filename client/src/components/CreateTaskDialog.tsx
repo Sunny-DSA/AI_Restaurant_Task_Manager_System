@@ -1,207 +1,247 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { taskApi, userApi, storeApi } from "@/lib/api";
-import type { User } from "@/types"; 
+import { useAuth } from "@/hooks/useAuth";
+import { storeApi, userApi, taskListApi } from "@/lib/api";
+import type { User } from "@/lib/api";
 
-
-type Priority = "low" | "medium" | "high";
+type SubtaskRow = {
+  id: string;
+  title: string;
+  description?: string;
+  photoRequired: boolean;
+  photoCount: number;
+  assigneeId?: number;   // optional per-subtask assignment
+};
 
 type Props = {
   open: boolean;
   onClose: () => void;
-  onCreated?: () => void; // call this to refetch
+  onCreated?: () => void; // refetch parent
 };
 
-export default function CreateTaskDialog({ open, onClose, onCreated }: Props) {
+export default function CreateTaskListDialog({ open, onClose, onCreated }: Props) {
   const { toast } = useToast();
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [priority, setPriority] = useState<Priority>("medium");
-  const [storeId, setStoreId] = useState<number | undefined>(undefined);
-  const [assigneeId, setAssigneeId] = useState<number | undefined>(undefined);
-  const [photoRequired, setPhotoRequired] = useState(false);
-  const [photoCount, setPhotoCount] = useState<number>(1);
-  const [recurrence, setRecurrence] = useState<{
-    frequency: "daily" | "weekly" | "monthly";
-    interval?: number;
-    count?: number;
-  } | undefined>(undefined);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "master_admin" || user?.role === "admin";
+  const isManager = user?.role === "store_manager";
 
   const [stores, setStores] = useState<Array<{ id: number; name: string }>>([]);
+  const [storeIdForUsers, setStoreIdForUsers] = useState<number | undefined>(undefined); // used only to load users list
   const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(false);
 
-  // load stores on open
+  const [listName, setListName] = useState("");
+  const [description, setDescription] = useState("");
+
+  const blankRow = (): SubtaskRow => ({
+    id: crypto.randomUUID(),
+    title: "",
+    description: "",
+    photoRequired: false,
+    photoCount: 1,
+    assigneeId: undefined,
+  });
+
+  const [rows, setRows] = useState<SubtaskRow[]>([blankRow()]);
+
+  // load stores (for admins to decide which store’s roster to show in assignee dropdowns)
   useEffect(() => {
     if (!open) return;
     (async () => {
       try {
         const s = await storeApi.getStores();
-        setStores(s);
-      } catch (e) {
-        // ignore
+        setStores(s || []);
+        if (isAdmin) {
+          setStoreIdForUsers(s?.[0]?.id);
+        } else if (isManager) {
+          setStoreIdForUsers(user?.storeId);
+        }
+      } catch {
+        setStores([]);
       }
     })();
   }, [open]);
 
-  // load users for selected store
+  // load users for chosen store (or manager's store)
   useEffect(() => {
     (async () => {
-      if (!storeId) { setUsers([]); return; }
+      if (!storeIdForUsers) {
+        setUsers([]);
+        return;
+      }
       try {
-        const u = await userApi.getUsers(storeId);
-        setUsers(u);
+        const u = await userApi.getUsers(storeIdForUsers);
+        setUsers(u || []);
       } catch {
         setUsers([]);
       }
     })();
-  }, [storeId]);
+  }, [storeIdForUsers]);
 
-  const resetForm = () => {
-    setTitle("");
-    setDescription("");
-    setPriority("medium");
-    setStoreId(undefined);
-    setAssigneeId(undefined);
-    setPhotoRequired(false);
-    setPhotoCount(1);
-    setRecurrence(undefined);
-  };
+  const userLabel = (u: User) =>
+    [u.firstName, u.lastName].filter(Boolean).join(" ").trim() || u.email || `User #${u.id}`;
+
+  const canSubmit = useMemo(() => {
+    if (!listName.trim()) return false;
+    if (rows.length === 0) return false;
+    return rows.every(r => r.title.trim().length > 0 && (!r.photoRequired || r.photoCount > 0));
+  }, [listName, rows]);
+
+  const addRow = () => setRows((r) => [...r, blankRow()]);
+  const removeRow = (id: string) => setRows((r) => r.filter(x => x.id !== id));
+  const patchRow = (id: string, patch: Partial<SubtaskRow>) =>
+    setRows((r) => r.map(x => (x.id === id ? { ...x, ...patch } : x)));
 
   const handleCreate = async () => {
     try {
-      if (!title.trim()) {
-        toast({ title: "Missing title", description: "Please enter a task title.", variant: "destructive" });
-        return;
-      }
-      if (!storeId) {
-        toast({ title: "Select store", description: "Please pick a store.", variant: "destructive" });
-        return;
-      }
+      if (!canSubmit) return;
+      // Build the import payload (one section == this list)
+      const items = rows.map((r) => ({
+        title: r.title.trim(),
+        description: r.description?.trim() || undefined,
+        photoRequired: !!r.photoRequired,
+        photoCount: Math.max( r.photoRequired ? 1 : 0, r.photoRequired ? r.photoCount : 0 ),
+        assigneeId: r.assigneeId ?? undefined, // per-item assignment (server supports override)
+      }));
 
-      setLoading(true);
-      await taskApi.createTask({
-        title,
-        description,
-        priority, // typed union
-        storeId,
-        assigneeId,
-        photoRequired,
-        photoCount: photoRequired ? photoCount : undefined,
-        recurrence,
+      await taskListApi.importOneList({
+        title: listName.trim(),
+        description: description.trim() || undefined,
+        items,
+        // For compatibility, we also send top-level defaults (not used if item has its own values)
+        defaultPhotoRequired: false,
+        defaultPhotoCount: 1,
       });
 
-      toast({ title: "Task created" });
-      onCreated?.();    // let parent refetch
-      resetForm();
+      toast({ title: "Task list created" });
+      onCreated?.();
       onClose();
+      // reset for next open
+      setListName("");
+      setDescription("");
+      setRows([blankRow()]);
     } catch (err: any) {
-      toast({
-        title: "Failed to create task",
-        description: err?.message ?? String(err),
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
+      toast({ title: "Failed to create task list", description: err?.message ?? String(err), variant: "destructive" });
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Create Task</DialogTitle>
+          <DialogTitle>Create Task List</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div>
-            <Label>Title</Label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
+            <Label>List Name *</Label>
+            <Input value={listName} onChange={(e) => setListName(e.target.value)} placeholder="e.g., Deep Cleaning" />
           </div>
 
           <div>
-            <Label>Description</Label>
-            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" />
+            <Label>Description (optional)</Label>
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this list for?" />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {isAdmin && (
             <div>
-              <Label>Priority</Label>
-              <Select value={priority} onValueChange={(v) => setPriority(v as Priority)}>
-                <SelectTrigger><SelectValue placeholder="Priority" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <Label>Store</Label>
+              <Label>Show employees from store (for assignee dropdowns)</Label>
               <Select
-                value={storeId ? String(storeId) : ""}
-                onValueChange={(v) => setStoreId(v ? Number(v) : undefined)}
+                value={storeIdForUsers ? String(storeIdForUsers) : ""}
+                onValueChange={(v) => setStoreIdForUsers(Number(v))}
               >
                 <SelectTrigger><SelectValue placeholder="Select store" /></SelectTrigger>
                 <SelectContent>
-                  {stores.map((s) => (
-                    <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
-                  ))}
+                  {stores.map(s => (<SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>))}
                 </SelectContent>
               </Select>
             </div>
+          )}
+
+          {/* Subtasks table */}
+          <div className="rounded-lg border p-3">
+            <div className="text-sm font-medium mb-2">Subtasks</div>
+
+            <div className="space-y-3">
+              {rows.map((r, idx) => (
+                <div key={r.id} className="grid grid-cols-12 gap-2 items-center">
+                  <div className="col-span-3">
+                    <Label className="sr-only">Title</Label>
+                    <Input
+                      value={r.title}
+                      onChange={(e) => patchRow(r.id, { title: e.target.value })}
+                      placeholder={`Subtask #${idx + 1} title`}
+                    />
+                  </div>
+
+                  <div className="col-span-3">
+                    <Label className="sr-only">Description</Label>
+                    <Input
+                      value={r.description}
+                      onChange={(e) => patchRow(r.id, { description: e.target.value })}
+                      placeholder="Optional description"
+                    />
+                  </div>
+
+                  <div className="col-span-3 flex items-center gap-2">
+                    <input
+                      id={`req-${r.id}`}
+                      type="checkbox"
+                      checked={r.photoRequired}
+                      onChange={(e) => patchRow(r.id, { photoRequired: e.target.checked, photoCount: e.target.checked ? Math.max(1, r.photoCount) : 0 })}
+                    />
+                    <Label htmlFor={`req-${r.id}`}>Photos required</Label>
+                    <Input
+                      className="w-20 ml-2"
+                      type="number"
+                      min={r.photoRequired ? 1 : 0}
+                      max={10}
+                      value={r.photoRequired ? r.photoCount : 0}
+                      onChange={(e) => {
+                        const n = Math.max(r.photoRequired ? 1 : 0, Math.min(10, Number(e.target.value) || 0));
+                        patchRow(r.id, { photoCount: n });
+                      }}
+                      disabled={!r.photoRequired}
+                    />
+                  </div>
+
+                  <div className="col-span-2">
+                    <Label className="sr-only">Assignee</Label>
+                    <Select
+                      value={r.assigneeId ? String(r.assigneeId) : ""}
+                      onValueChange={(v) => patchRow(r.id, { assigneeId: v ? Number(v) : undefined })}
+                    >
+                      <SelectTrigger><SelectValue placeholder="All employees" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">All employees</SelectItem>
+                        {users.map((u) => (
+                          <SelectItem key={u.id} value={String(u.id)}>
+                            {userLabel(u)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="col-span-1 flex justify-end">
+                    <Button variant="ghost" onClick={() => removeRow(r.id)} disabled={rows.length === 1}>Remove</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3">
+              <Button variant="outline" onClick={addRow}>+ Add subtask</Button>
+            </div>
           </div>
 
-          <div>
-            <Label>Assignee (optional)</Label>
-            <Select
-              value={assigneeId ? String(assigneeId) : ""}
-              onValueChange={(v) => setAssigneeId(v ? Number(v) : undefined)}
-            >
-              <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">Unassigned</SelectItem>
-                {users.map((u) => (
-                  <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <input
-              id="photoRequired"
-              type="checkbox"
-              checked={photoRequired}
-              onChange={(e) => setPhotoRequired(e.target.checked)}
-            />
-            <Label htmlFor="photoRequired">Photo required</Label>
-            {photoRequired && (
-              <Input
-                className="ml-3 w-24"
-                type="number"
-                min={1}
-                max={10}
-                value={photoCount}
-                onChange={(e) => setPhotoCount(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
-              />
-            )}
-          </div>
-
-          {/* Recurrence (optional) – keep it simple */}
-          {/* You can remove this block if you don't need recurrence in UI yet */}
-
-          <div className="flex justify-end gap-2 pt-3">
+          <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button variant="default" onClick={handleCreate} disabled={loading}>
-              {loading ? "Creating..." : "Create Task"}
-            </Button>
+            <Button onClick={handleCreate} disabled={!canSubmit}>Create List</Button>
           </div>
         </div>
       </DialogContent>

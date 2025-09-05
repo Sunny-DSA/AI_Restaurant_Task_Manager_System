@@ -108,6 +108,29 @@ export class AuthService {
     return { pin: newPin };
   }
 
+
+  /** Set a user's 4-digit PIN (ensures uniqueness within their store) */
+  static async setUserPin(userId: number, pin: string) {
+    const normalized = String(pin).trim();
+    if (!/^\d{4}$/.test(normalized)) {
+      throw new Error("PIN must be exactly 4 digits");
+    }
+
+    const target = await storage.getUser(userId);
+    if (!target) throw new Error("User not found");
+
+    // If user belongs to a store, ensure no one else in that store has this PIN
+    if (target.storeId) {
+      const conflict = await storage.getUserByPin(normalized, target.storeId);
+      if (conflict && conflict.id !== userId) {
+        throw new Error("PIN already in use for this store");
+      }
+    }
+
+    await storage.updateUser(userId, { pin: normalized });
+    return { pin: normalized };
+  }
+
   /** Simple permission matrix (optional helper for UI/backoffice) */
   static hasPermission(userRole: string, action: string, module: string): boolean {
     const permissions: Record<string, Record<string, string[]>> = {
@@ -128,7 +151,8 @@ export class AuthService {
       [roleEnum.STORE_MANAGER]: {
         stores: ["read"],
         users: ["read"],
-        tasks: ["read", "update", "assign", "complete"],
+        tasks: ["create","read", "update", "assign", "complete"],
+        tasklists: ["create", "read", "update"],
         templates: ["read"],
         reports: ["read"],
       },
