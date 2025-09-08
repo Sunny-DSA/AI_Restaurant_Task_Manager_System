@@ -57,7 +57,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 const isDev = process.env.NODE_ENV !== "production";
-const PORT = Number(process.env.API_PORT ?? process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 5000;
 
 async function startServer() {
   const server = createServer(app);
