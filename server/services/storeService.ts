@@ -77,7 +77,7 @@ export class StoreService {
     userLat: number,
     userLon: number
   ): { isValid: boolean; distance: number; allowedRadius: number } {
-    const allowedRadius = store.geofenceRadius || 100;
+    const allowedRadius = store.geofenceRadius || 200; // Increased from 100m to 200m for better GPS tolerance
 
     if (!store.latitude || !store.longitude) {
       return { isValid: false, distance: 0, allowedRadius };

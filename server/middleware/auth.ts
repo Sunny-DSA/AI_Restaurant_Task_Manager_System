@@ -103,18 +103,24 @@ export const validateGeofence = async (
         ? store.geofenceRadius
         : store.geofenceRadius != null
         ? Number(store.geofenceRadius)
-        : 100;
+        : 200; // Increased from 100m to 200m for better GPS tolerance
 
     if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
       return res.status(400).json({ message: "Store location not configured" });
     }
 
     const distance = haversineMeters({ lat, lng }, { lat: latitude, lng: longitude });
+    
+    // Debug logging
+    console.log(`Geofence validation: Store(${lat}, ${lng}), User(${latitude}, ${longitude}), Distance: ${Math.round(distance)}m, Allowed: ${radiusM}m`);
+    
     if (distance > radiusM) {
       return res.status(403).json({
         message: "Location verification failed",
         distance: Math.round(distance),
         allowedRadius: radiusM,
+        storeLocation: { lat, lng },
+        userLocation: { lat: latitude, lng: longitude },
       });
     }
 
