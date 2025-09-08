@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { authApi } from "@/lib/authApi";
+import { checkinApi } from "@/lib/api";
 
 type TemplateItem = {
   id: number;
@@ -267,7 +267,7 @@ export default function TaskListRunPage() {
       if (!targetStoreId) {
         throw new Error("Store ID required for check-in");
       }
-      const res = await authApi.checkInToStore(targetStoreId, coords);
+      const res = await checkinApi.checkInToStore(targetStoreId, coords);
       return res;
     },
     onSuccess: () => {
