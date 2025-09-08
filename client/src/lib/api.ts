@@ -200,7 +200,7 @@ const toIsoIfDate = (v: unknown): unknown =>
   v instanceof Date ? v.toISOString() : v;
 
 /* =========
-   API
+   API – Tasks
    ========= */
 
 export const taskApi = {
@@ -282,10 +282,13 @@ export const taskApi = {
     }
     if (taskItemId) form.append("taskItemId", String(taskItemId));
 
-    // Use apiRequest so cookies are included and errors are uniform
     return apiRequest("POST", `/api/tasks/${taskId}/photos`, form);
   },
 };
+
+/* =========
+   API – Stores
+   ========= */
 
 export const storeApi = {
   getStores(): Promise<Store[]> {
@@ -308,6 +311,10 @@ export const storeApi = {
   },
 };
 
+/* =========
+   API – Users
+   ========= */
+
 export const userApi = {
   getUsers(storeId?: number): Promise<User[]> {
     const params = storeId ? `?storeId=${storeId}` : "";
@@ -319,11 +326,15 @@ export const userApi = {
   resetPin(userId: number): Promise<{ pin: string }> {
     return apiRequest<{ pin: string }>("PUT", `/api/users/${userId}/reset-pin`);
   },
-  // NEW: set exact 4-digit PIN (admin/manager only)
+  // Set exact 4-digit PIN (admin/manager only)
   setPin(userId: number, pin: string) {
     return apiRequest<{ ok: true }>("PUT", `/api/users/${userId}/pin`, { pin });
   },
 };
+
+/* =========
+   API – Analytics (unchanged)
+   ========= */
 
 export const analyticsApi = {
   getTaskStats(storeId?: number, dateFrom?: Date, dateTo?: Date): Promise<TaskStats> {
@@ -340,7 +351,52 @@ export const analyticsApi = {
 };
 
 /* =========
-   Task Lists (NEW)
+   API – Check-ins (geofence)
+   ========= */
+
+export interface CheckInStatus {
+  checkedIn: boolean;
+  storeId?: number | null;
+  at?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  radiusM?: number | null;
+}
+
+export const checkinApi = {
+  // Legacy shape kept for compatibility (some pages may not use this).
+  status(): Promise<CheckInStatus> {
+    // If you later add a status route, swap it here.
+    // For now return a neutral status object to avoid breaking callers.
+    return Promise.resolve({ checkedIn: false });
+  },
+
+  // Old signature
+  checkIn(coords: { latitude: number; longitude: number }): Promise<CheckInStatus> {
+    // Kept to avoid breaking callers; server requires storeId – prefer checkInToStore.
+    return apiRequest<CheckInStatus>("POST", "/api/auth/checkin", {
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      // storeId should be supplied with checkInToStore
+    });
+  },
+
+  // Recommended: explicit store
+  checkInToStore(storeId: number, coords: { latitude: number; longitude: number }): Promise<{ success: true }> {
+    return apiRequest<{ success: true }>("POST", "/api/auth/checkin", {
+      storeId,
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+    });
+  },
+
+  checkOut(): Promise<{ success: true }> {
+    return apiRequest<{ success: true }>("POST", "/api/auth/checkout");
+  },
+};
+
+/* =========
+   Task Lists (original + enhanced helpers)
    ========= */
 
 export interface TaskList {
@@ -357,6 +413,16 @@ export interface TaskList {
   updatedAt: string;
 }
 
+export interface TaskTemplate {
+  id: number;
+  listId: number;
+  title: string;
+  description?: string | null;
+  photoRequired?: boolean;
+  photoCount?: number | null;
+  assigneeId?: number | null;
+}
+
 export type CreateTaskListPayload = {
   name: string;
   description?: string;
@@ -371,7 +437,35 @@ export type UpdateTaskListPayload = Partial<CreateTaskListPayload> & {
   name?: string; // allow rename specifically
 };
 
+// --- Convenience payload for the /api/task-lists/import "sections" format
+export type TaskListImportSectionsPayload = {
+  assigneeType: "store_wide" | "manager" | "specific_employee";
+  assigneeId?: number | null;
+  recurrenceType: "none" | "daily" | "weekly" | "monthly";
+  recurrencePattern?: string | null;
+  sections: Array<{
+    title: string;
+    items: Array<{
+      title: string;
+      description?: string;
+      photoRequired?: boolean;
+      photoCount?: number;
+      assigneeId?: number;
+    }>;
+  }>;
+  // optional defaults when items omit explicit photo rules
+  defaultPhotoRequired?: boolean;
+  defaultPhotoCount?: number;
+};
+
+// Response shape for ensure-task routes
+export type EnsureTaskResponse = {
+  created: boolean;
+  task: any;
+};
+
 export const taskListApi = {
+  // ----- existing endpoints (kept as-is)
   getLists(): Promise<any[]> {
     return apiRequest<any[]>("GET", "/api/task-lists");
   },
@@ -384,6 +478,7 @@ export const taskListApi = {
   duplicateList(id: number): Promise<any> {
     return apiRequest<any>("POST", `/api/task-lists/${id}/duplicate`);
   },
+
   import(payload: {
     list: {
       name: string;
@@ -404,5 +499,89 @@ export const taskListApi = {
     assignToMyStore?: boolean;
   }): Promise<{ success: true; listId: number }> {
     return apiRequest("POST", "/api/task-lists/import", payload);
+  },
+
+  // ----- NEW: convenience import using "sections" (matches server routes)
+  async importOneList(opts: {
+    title: string;
+    description?: string;
+    items: Array<{ title: string; description?: string; photoRequired?: boolean; photoCount?: number; assigneeId?: number }>;
+    defaultPhotoRequired?: boolean;
+    defaultPhotoCount?: number;
+  }): Promise<{ ok: boolean; created: number; lists: any[] }> {
+    const body = {
+      sections: [
+        {
+          title: opts.title,
+          items: opts.items,
+        },
+      ],
+      defaultPhotoRequired: !!opts.defaultPhotoRequired,
+      defaultPhotoCount:
+        typeof opts.defaultPhotoCount === "number" ? opts.defaultPhotoCount : 1,
+      description: opts.description,
+    };
+    return apiRequest("POST", "/api/task-lists/import", body);
+  },
+
+  // ----- NEW: import via sections with full control
+  importSections(payload: TaskListImportSectionsPayload): Promise<{
+    ok?: boolean;
+    created?: number;
+    lists: any[];
+  }> {
+    return apiRequest("POST", "/api/task-lists/import", payload);
+  },
+
+  // ----- NEW: fetch one list & its templates
+  getList(id: number): Promise<TaskList> {
+    return apiRequest<TaskList>("GET", `/api/task-lists/${id}`);
+  },
+  getTemplates(listId: number): Promise<TaskTemplate[]> {
+    return apiRequest<TaskTemplate[]>("GET", `/api/task-lists/${listId}/templates`);
+  },
+
+  // ----- NEW: today’s tasks for a list+store (employees don’t need “Run”)
+  getTodayTasks(listId: number, storeId: number): Promise<any[]> {
+    const qs = new URLSearchParams({ storeId: String(storeId) }).toString();
+    return apiRequest<any[]>("GET", `/api/task-lists/${listId}/tasks?${qs}`);
+  },
+
+  // alias – same as getTodayTasks for readability
+  getListTasksForStoreToday(listId: number, storeId: number) {
+    return this.getTodayTasks(listId, storeId);
+  },
+
+  // ----- ensure today’s task exists – use body-based route for compatibility
+  ensureTask(
+    listId: number,
+    templateId: number,
+    storeId?: number
+  ): Promise<EnsureTaskResponse> {
+    const qs = storeId ? `?storeId=${storeId}` : "";
+    return apiRequest<EnsureTaskResponse>(
+      "POST",
+      `/api/task-lists/${listId}/ensure-task${qs}`,
+      { templateId }
+    );
+  },
+
+  // also expose explicit body-based call (same as ensureTask above)
+  ensureTaskViaBody(
+    listId: number,
+    templateId: number,
+    storeId?: number
+  ): Promise<EnsureTaskResponse> {
+    const qs = storeId ? `?storeId=${storeId}` : "";
+    return apiRequest<EnsureTaskResponse>(
+      "POST",
+      `/api/task-lists/${listId}/ensure-task${qs}`,
+      { templateId }
+    );
+  },
+
+  // ----- update a task list (e.g., to bind a list to a store after import)
+  updateList(id: number, payload: UpdateTaskListPayload): Promise<any> {
+    return apiRequest<any>("PUT", `/api/task-lists/${id}`, payload);
   },
 };

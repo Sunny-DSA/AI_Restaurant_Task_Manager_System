@@ -28,6 +28,8 @@ import {
 
 import { Plus, List, Repeat, Users, Edit, Trash2, Copy, Upload } from "lucide-react";
 
+/* === ADDED: external Create modal (your createtaskdialog.tsx) === */
+import CreateTaskListDialogModal from "@/components/CreateTaskDialog";
 
 /* ---------------- helpers ---------------- */
 const getRecurrenceLabel = (type?: string) => {
@@ -94,7 +96,7 @@ export default function TaskLists() {
     },
   });
 
-  /* ---------- mutations ---------- */
+  /* ---------- mutations (original) ---------- */
   const createListMutation = useMutation({
     mutationFn: async (data: any) => {
       const res = await fetch("/api/task-lists", {
@@ -234,6 +236,66 @@ export default function TaskLists() {
 
   const confirmDelete = (name?: string) =>
     window.confirm(`Delete "${name ?? "this list"}"? This cannot be undone.`);
+
+  /* === ADDED: parent-delegated create for external modal === */
+  const createFromModal = async (data: {
+    listName: string;
+    description?: string;
+    storeId?: number;
+    items: Array<{ title: string; description?: string; photoRequired: boolean; photoCount: number; assigneeId?: number }>;
+    isAdmin: boolean;
+    isManager: boolean;
+  }) => {
+    try {
+      // 1) create via import "sections"
+      const res = await fetch("/api/task-lists/import", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sections: [{ title: data.listName, items: data.items }],
+          description: data.description,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const payload = await res.json();
+
+      // 2) bind created lists to the store (admin-picked or manager's own)
+      const created: Array<{ id: number }> = payload?.lists || [];
+      if ((data.isManager || !data.isAdmin) && user?.storeId) {
+        for (const l of created) {
+          const r = await fetch(`/api/task-lists/${l.id}`, {
+            method: "PUT",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ storeId: user.storeId }),
+          });
+          if (!r.ok) throw new Error(await r.text());
+        }
+      } else if (data.isAdmin && data.storeId) {
+        for (const l of created) {
+          const r = await fetch(`/api/task-lists/${l.id}`, {
+            method: "PUT",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ storeId: data.storeId }),
+          });
+          if (!r.ok) throw new Error(await r.text());
+        }
+      }
+
+      toast({ title: "Task list created" });
+      setShowCreateDialog(false);
+      qc.invalidateQueries({ queryKey: ["/api/task-lists"] });
+    } catch (e: any) {
+      toast({
+        title: "Failed to create task list",
+        description: String(e?.message || e),
+        variant: "destructive",
+      });
+      throw e; // allow modal to react if it needs to
+    }
+  };
 
   /* ---------- view ---------- */
   const filtered = useMemo(() => {
@@ -431,25 +493,29 @@ export default function TaskLists() {
         </Card>
       )}
 
-      {/* dialogs */}
-      <CreateTaskListDialog
-        isOpen={showCreateDialog || !!editingList}
-        onClose={() => {
-          setShowCreateDialog(false);
-          setEditingList(null);
-        }}
-        existingList={editingList}
-        stores={stores}
-        onSubmit={(data) => {
-          if (editingList?.id) {
-            updateListMutation.mutate({ id: editingList.id, data });
-          } else {
-            createListMutation.mutate(data);
-          }
-        }}
-        isLoading={createListMutation.isPending || updateListMutation.isPending}
+      {/* === ADDED: External Create modal (UI-only, returns payload to parent) === */}
+      <CreateTaskListDialogModal
+        open={showCreateDialog}
+        onClose={() => setShowCreateDialog(false)}
+        onCreated={() => qc.invalidateQueries({ queryKey: ["/api/task-lists"] })}
+        onCreate={createFromModal}
       />
 
+      {/* === KEPT: Inline dialog for EDIT ONLY (unchanged) === */}
+      {editingList && (
+        <CreateTaskListDialog
+          isOpen={!!editingList}
+          onClose={() => setEditingList(null)}
+          existingList={editingList}
+          stores={stores}
+          onSubmit={(data) => {
+            updateListMutation.mutate({ id: editingList.id, data });
+          }}
+          isLoading={updateListMutation.isPending}
+        />
+      )}
+
+      {/* Import dialog (unchanged) */}
       <ImportTaskListDialog
         isOpen={showImportDialog}
         onClose={() => setShowImportDialog(false)}
@@ -477,7 +543,7 @@ function Row({
 }
 
 /* =========================================================
-   Create / Edit dialog
+   Create / Edit dialog (INLINE) — used for EDIT ONLY now
 ========================================================= */
 
 type CreateTaskListDialogProps = {

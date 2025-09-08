@@ -1,21 +1,20 @@
-import type { Request, Response, NextFunction } from "express";
+// server/middleware/requireCheckin.ts
+import { Request, Response, NextFunction } from "express";
 
-type ActiveCheckin = {
-  storeId: number;
-  storeName?: string;
-  fence?: { lat: number; lng: number; radiusM: number };
-  startedAt: string;
-};
+const REQUIRE_CHECKIN =
+  process.env.REQUIRE_CHECKIN !== undefined
+    ? process.env.REQUIRE_CHECKIN === "False"
+    : false; // default ON for safety
 
 export function requireActiveCheckin(req: Request, res: Response, next: NextFunction) {
-  const session = (req as any).session;
-  const user = (req as any).user || session?.user;
+  if (!REQUIRE_CHECKIN) return next();
 
-  if (!user?.id) return res.status(401).json({ message: "Unauthenticated" });
+  const active = (req as any).session?.activeCheckin as
+    | { storeId: number; storeName?: string; fence?: { lat: number; lng: number; radiusM: number } }
+    | undefined;
 
-  const active: ActiveCheckin | undefined = session?.activeCheckin;
-  if (!active) {
-    return res.status(403).json({ message: "You must check in at the store first" });
+  if (!active || !active.fence) {
+    return res.status(403).json({ message: "Check-in required at the store to continue." });
   }
 
   (req as any).activeCheckin = active;

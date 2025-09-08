@@ -5,7 +5,8 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import TaskListRunPage from "@/pages/TaskListRunPage"; //NEW
+import TaskListRunPage from "@/pages/TaskListRunPage";
+import TaskListsPage from "@/pages/TaskListsPage";//NEW
 import Layout from "@/components/Layout";
 import Dashboard from "@/pages/Dashboard";
 import Tasks from "@/pages/Tasks";
@@ -55,6 +56,7 @@ function ProtectedRoutes() {
         <Route path="/tasks" component={Tasks} />
         <Route path="/task" component={Tasks} />
         <Route path="/task-lists" component={TaskLists} />
+        <Route path="/tasklists" component={TaskListsPage} />
         {/* NEW: run page */}
         <Route path="/tasklists/run/:id" component={TaskListRunPage} />
         <Route path="/stores" component={Stores} />
