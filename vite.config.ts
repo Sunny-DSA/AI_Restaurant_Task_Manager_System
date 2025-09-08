@@ -24,8 +24,9 @@ export default defineConfig({
       strictPort: true,
       allowedHosts: ["*.replit.dev", "*.riker.replit.dev"],
       proxy: {
-        "/api": { target: "http://localhost:5001", changeOrigin: true },
-        "/uploads": { target: "http://localhost:5001", changeOrigin: true },},
+        "/api": { target: "http://localhost:5000", changeOrigin: true },
+        "/uploads": { target: "http://localhost:5000", changeOrigin: true },
+      },
     
     fs: {
       strict: true,
