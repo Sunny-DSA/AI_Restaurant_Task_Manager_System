@@ -34,6 +34,11 @@ app.use(
   })
 );
 
+// Health check endpoint for deployment
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 // static uploads
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
@@ -52,7 +57,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 const isDev = process.env.NODE_ENV !== "production";
-const PORT = Number(process.env.API_PORT ?? process.env.PORT) || 5000;
+const PORT = Number(process.env.API_PORT ?? process.env.PORT) || 3000;
 
 async function startServer() {
   const server = createServer(app);
