@@ -1,6 +1,6 @@
 // client/src/components/CreateTaskDialog.tsx
 import { useEffect, useMemo, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle ,DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -150,7 +150,10 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
   const removeRow = (id: string) => setRows((r) => r.filter((x) => x.id !== id));
 
   // ---- Save (import with graceful fallback) ----
+  // ---- Save (fixed: no duplicate creation) ----
   const handleSave = async () => {
+    console.log("handleSave called", { valid, rows, listName, storeId, defaultAssign, defaultEmpId });
+
     try {
       if (!valid) {
         toast({
@@ -161,7 +164,7 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
         return;
       }
 
-      // map default employee id to a user id (if provided)
+      // Map default employee id to a user id (if provided)
       let defaultAssigneeId: number | undefined = undefined;
       if (defaultAssign === "specific_employee" && defaultEmpId.trim() && users.length > 0) {
         const byId = users.find(
@@ -182,8 +185,14 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
           assigneeId: r.assigneeId ?? defaultAssigneeId ?? undefined,
         }));
 
+      console.log("Clean items prepared:", cleanItems);
+
       if (cleanItems.length === 0) {
-        toast({ title: "No subtasks", description: "Add at least one subtask.", variant: "destructive" });
+        toast({
+          title: "No subtasks",
+          description: "Add at least one subtask.",
+          variant: "destructive",
+        });
         return;
       }
 
@@ -192,33 +201,15 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
       const chosenStoreId =
         (isAdmin ? storeId : user?.storeId ? Number(user.storeId) : storeId) || undefined;
 
-      // delegate to parent if provided
-      if (onCreate) {
-        await Promise.resolve(
-          onCreate({
-            listName: listName.trim(),
-            description: description.trim() || undefined,
-            storeId: chosenStoreId,
-            items: cleanItems,
-            isAdmin,
-            isManager: !!isManager,
-            recurrence,
-          })
-        );
-        onCreated?.();
-        onClose();
-        return;
-      }
+      // Call /import route
+      console.log("Calling /import route with storeId:", chosenStoreId);
 
-      // try the /import route first
       const importRes = await fetch("/api/task-lists/import", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          assigneeType: (defaultAssigneeId ? "specific_employee" : "store_wide") as
-            | "specific_employee"
-            | "store_wide",
+          assigneeType: defaultAssigneeId ? "specific_employee" : "store_wide",
           assigneeId: defaultAssigneeId,
           recurrenceType: recurrence === "none" ? "none" : recurrence,
           sections: [{ title: listName.trim(), items: cleanItems }],
@@ -226,28 +217,52 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
         }),
       });
 
+      const importBody = await importRes.json();
+      console.log("Import response status:", importRes.status, "body:", importBody);
+
       if (!importRes.ok) {
-        throw new Error(`IMPORT_HTTP_${importRes.status}`);
-      }
-      const ctype = importRes.headers.get("content-type") || "";
-      if (!ctype.includes("application/json")) {
-        // HTML or something else – treat as missing route
-        throw new Error("IMPORT_NON_JSON");
+        throw new Error(`IMPORT_HTTP_${importRes.status}: ${JSON.stringify(importBody)}`);
       }
 
-      const payload = await importRes.json();
-      let created = (payload?.lists || []) as Array<{ id: number }>;
+      const createdLists = (importBody?.lists || []) as Array<{ id: number }>;
 
-      // Bind to store if needed
-      if (chosenStoreId && created?.length) {
-        for (const l of created) {
-          const r = await fetch(`/api/task-lists/${l.id}`, {
-            method: "PUT",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ storeId: chosenStoreId }),
-          });
-          if (!r.ok) throw new Error(await r.text());
+      // Create templates for each subtask, handle duplicates gracefully
+      for (const list of createdLists) {
+        console.log(`Creating templates for listId ${list.id}`);
+        for (const item of cleanItems) {
+          try {
+            const templateRes = await fetch(`/api/task-lists/${list.id}/templates`, {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title: item.title,
+                description: item.description,
+                storeId: chosenStoreId,
+                assigneeType: item.assigneeId ? "specific_employee" : "store_wide",
+                assigneeId: item.assigneeId ?? null,
+                photoRequired: item.photoRequired,
+                photoCount: item.photoCount,
+              }),
+            });
+
+            if (templateRes.status === 201) {
+              const templateCreated = await templateRes.json();
+              console.log("Template created:", templateCreated);
+            } else if (templateRes.status === 409) {
+              console.log(`Template "${item.title}" already exists, skipping creation.`);
+            } else {
+              const errMsg = await templateRes.text();
+              throw new Error(`Template creation failed: ${errMsg}`);
+            }
+          } catch (e: any) {
+            console.error(`Error creating template "${item.title}":`, e);
+            toast({
+              title: "Failed to create template",
+              description: e.message || "Unknown error",
+              variant: "destructive",
+            });
+          }
         }
       }
 
@@ -255,52 +270,17 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
       onCreated?.();
       onClose();
     } catch (err: any) {
-      // Fallback to plain /api/task-lists to at least create the list record
-      try {
-        const fallbackRes = await fetch("/api/task-lists", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: listName.trim(),
-            description: (description || rows.map((r) => r.title.trim()).filter(Boolean).join(" • ")) || null,
-            assigneeType: defaultAssign,
-            assigneeId: undefined, // defaulting to store_wide; per-task overrides not supported in this fallback
-            recurrenceType: recurrence,
-            recurrencePattern: null,
-          }),
-        });
-        if (!fallbackRes.ok) throw new Error(await fallbackRes.text());
-        const created = await fallbackRes.json();
-
-        // store binding
-        const chosenStoreId =
-          (isAdmin ? storeId : user?.storeId ? Number(user.storeId) : storeId) || undefined;
-        if (chosenStoreId && created?.id) {
-          await fetch(`/api/task-lists/${created.id}`, {
-            method: "PUT",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ storeId: chosenStoreId }),
-          });
-        }
-
-        toast({
-          title: "Task list created",
-          description:
-            "The backend import route is missing, so templates weren’t imported. You can still edit the list.",
-        });
-        onCreated?.();
-        onClose();
-      } catch (e2: any) {
-        const msg = String(e2?.message || err?.message || err || "Unknown error");
-        toast({ title: "Failed to create list", description: msg, variant: "destructive" });
-      }
+      console.error("Error caught in handleSave:", err);
+      toast({
+        title: "Failed to create list",
+        description: String(err?.message || "Unknown error"),
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
+      console.log("handleSave finished, saving state reset");
     }
   };
-
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent
@@ -313,6 +293,9 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
       >
         <DialogHeader>
           <DialogTitle>Create New Task List</DialogTitle>
+          <DialogDescription>
+            Fill out the form below to create a new task list for your store or team.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5">

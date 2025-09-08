@@ -61,6 +61,7 @@ const getAssigneeLabel = (type?: string) => {
    Page
 ========================================================= */
 export default function TaskLists() {
+
   const [, setLocation] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -74,6 +75,8 @@ export default function TaskLists() {
   const canCreate = hasPermission(user?.role || "", "create", "task_lists");
   const canUpdate = hasPermission(user?.role || "", "update", "task_lists");
   const canDelete = hasPermission(user?.role || "", "delete", "task_lists");
+
+  console.log("StoreId",user);
 
   /* ---------- data ---------- */
   const { data: taskLists = [] } = useQuery({
@@ -613,6 +616,7 @@ function CreateTaskListDialog({
     }
     onSubmit(payload);
   };
+  
 
   const showStoreSelect =
     _stores.length > 0 && (user?.role === "master_admin" || user?.role === "admin");

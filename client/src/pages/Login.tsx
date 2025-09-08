@@ -3,7 +3,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -46,28 +53,23 @@ export default function LoginPage() {
     }
   }, [tab]);
 
-  // --- Error sanitizer: always show a friendly sentence in the toast ---
+  console.log("storeid", storeId );
+
+  // --- Error sanitizer ---
   const friendly = (err: unknown, fallback = "Login failed. Please try again.") => {
     const raw =
       err && typeof err === "object" && "message" in err
         ? String((err as any).message)
         : String(err ?? "");
-    // If it looks like: `401 Unauthorized: {"message":"..."}`
     const jsonMatch = raw.match(/\{[\s\S]*\}$/);
     if (jsonMatch) {
       try {
         const obj = JSON.parse(jsonMatch[0]);
-        if (obj && typeof obj.message === "string" && obj.message.trim()) {
-          return obj.message;
-        }
-      } catch {
-        // ignore JSON parse errors
-      }
+        if (obj && typeof obj.message === "string" && obj.message.trim()) return obj.message;
+      } catch {}
     }
-    // Strip leading "### Word:" status prefixes if present
     const stripped = raw.replace(/^\s*\d{3}\s+[A-Za-z ]+:\s*/, "").trim();
-    if (stripped) return stripped;
-    return fallback;
+    return stripped || fallback;
   };
 
   const showError = (e: unknown, title = "Login failed") =>
@@ -93,34 +95,37 @@ export default function LoginPage() {
           });
         }
 
-        // Try to send geolocation so server can enforce fence
+        // Get user location
+        let coords: { latitude?: number; longitude?: number } = {};
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
-            async (pos) => {
-              try {
-                await login({
-                  storeId: Number(storeId),
-                  pin,
-                  rememberMe: rememberStore,
-                  latitude: pos.coords.latitude,
-                  longitude: pos.coords.longitude,
-                });
-              } catch (e) {
-                showError(e);
-              }
+            (pos) => {
+              coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+              login({
+                storeId: Number(storeId),
+                pin,
+                rememberMe: rememberStore,
+                ...coords,
+              }).catch(showError);
             },
-            async () => {
-              try {
-                await login({ storeId: Number(storeId), pin, rememberMe: rememberStore });
-              } catch (e) {
-                showError(e);
-              }
+            () => {
+              // fallback if location not available
+              login({
+                storeId: Number(storeId),
+                pin,
+                rememberMe: rememberStore,
+              }).catch(showError);
             }
           );
-          return; // prevent double submit fall-through
+          return; // prevent double submit
         }
 
-        await login({ storeId: Number(storeId), pin, rememberMe: rememberStore });
+        // fallback if geolocation not supported
+        await login({
+          storeId: Number(storeId),
+          pin,
+          rememberMe: rememberStore,
+        });
       }
     } catch (e) {
       showError(e);
@@ -129,7 +134,6 @@ export default function LoginPage() {
 
   return (
     <div className="relative min-h-screen flex items-center justify-center bg-background">
-      {/* Dark mode toggle on top-right */}
       <div className="absolute top-4 right-4">
         <ThemeToggle />
       </div>
@@ -210,18 +214,16 @@ export default function LoginPage() {
                     </Button>
                   </div>
 
-                  <QRScanner
-                    isOpen={showQR}
-                    onClose={() => setShowQR(false)}
-                    onSuccess={(scannedStoreId) => setStoreId(String(scannedStoreId))}
-                  />
+                  <QRScanner isOpen={showQR} onClose={() => setShowQR(false)} onSuccess={(scannedStoreId) => setStoreId(String(scannedStoreId))} />
                 </>
               )}
             </CardContent>
 
             <CardFooter className="flex flex-col space-y-4">
               <Button type="submit" className="w-full" disabled={isLoggingIn}>
-                {isLoggingIn ? "Logging in..." : (
+                {isLoggingIn ? (
+                  "Logging in..."
+                ) : (
                   <>
                     <LogIn className="w-4 h-4 mr-2" />
                     Login

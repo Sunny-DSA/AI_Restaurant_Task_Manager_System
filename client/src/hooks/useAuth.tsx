@@ -1,6 +1,6 @@
 // client/src/hooks/useAuth.tsx
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, checkinApi } from "@/lib/api"; // <-- import checkinApi
 
 type User = {
   id: number;
@@ -40,8 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await apiRequest("GET", "/api/auth/me");
-        const me = (await res.json()) as User;
+        const me = await apiRequest<User>("GET", "/api/auth/me");
         setUser(me);
       } catch {
         setUser(null);
@@ -54,14 +53,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (args: LoginArgs) => {
     setIsLoggingIn(true);
     try {
-      const res = await apiRequest("POST", "/api/auth/login", args);
-      const data = await res.json();
+      // apiRequest already returns parsed JSON
+      const data = await apiRequest<User>("POST", "/api/auth/login", args);
       setUser(data);
+
+      // --- auto check-in for store login ---
+      if ("storeId" in args && args.storeId) {
+        const coords = {
+          latitude: args.latitude ?? 0,
+          longitude: args.longitude ?? 0,
+        };
+        await checkinApi.checkInToStore(args.storeId, coords);
+      }
+
       return data;
     } finally {
       setIsLoggingIn(false);
     }
   }, []);
+
   const verifyQR = useCallback(async (args: VerifyQRArgs) => {
     setIsVerifyingQR(true);
     try {

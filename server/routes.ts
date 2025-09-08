@@ -25,7 +25,6 @@ router.post("/auth/login", async (req, res) => {
   try {
     const { email, password, pin, storeId, rememberMe, latitude, longitude } = req.body ?? {};
     let user: any;
-
     if (email && password) {
       try {
         user = await AuthService.authenticateWithEmail(String(email), String(password));
@@ -564,6 +563,21 @@ router.post(
       const listId = Number(req.params.id);
       const me = (req as any).user!;
       const b = req.body ?? {};
+
+      // Check if a template with the same title already exists for this list
+      // @ts-ignore
+      const existingTemplate = await storage.db.taskTemplates.findFirst({
+        where: { listId, title: String(b.title || "Task") },
+      });
+
+      if (existingTemplate) {
+        return res.status(200).json({
+          message: "Template already exists",
+          template: existingTemplate,
+        });
+      }
+
+      // Create new template if not exists
       const row = await storage.createTaskTemplate({
         listId,
         title: String(b.title || "Task"),
@@ -580,12 +594,15 @@ router.post(
         priority: b.priority ?? "normal",
         isActive: true,
       });
+
       res.status(201).json(row);
     } catch (err: any) {
       res.status(500).json({ message: err?.message || "Failed to create template" });
     }
   }
 );
+
+
 
 // Update one template
 router.put(
@@ -631,65 +648,56 @@ router.delete(
       res.status(500).json({ message: err?.message || "Failed to delete template" });
     }
   }
-);*/
+);*?
 
 /* ============== TASK LIST RUN / TODAY / ENSURE ============== */
 router.post(
-  "/task-lists/:id/run",
+  "/task-lists/:id/templates",
   authenticateToken,
   requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
   async (req, res) => {
-    const listId = Number(req.params.id);
-    const me = (req as any).user!;
     try {
-      const list = await storage.getTaskList(listId);
-      if (!list) return res.status(404).json({ message: "Task list not found" });
+      const listId = Number(req.params.id);
+      const me = (req as any).user!;
+      const b = req.body ?? {};
 
-      const targetStoreId =
-        req.query.storeId != null
-          ? Number(req.query.storeId)
-          : req.body?.storeId != null
-          ? Number(req.body.storeId)
-          : me.storeId;
+      // Check if template exists
+      const existingTemplate = await storage.getTaskTemplate(listId);
 
-      if (me.role === roleEnum.STORE_MANAGER && (!targetStoreId || targetStoreId !== me.storeId)) {
-        return res.status(403).json({ message: "Unauthorized store" });
-      }
-      if (!targetStoreId) return res.status(400).json({ message: "storeId required" });
-
-      let templates: any[] = [];
-      if (typeof (storage as any).getTemplatesByList === "function") {
-        templates = await (storage as any).getTemplatesByList(listId);
-      } else {
-        const all = await storage.getTaskTemplates();
-        templates = (all || []).filter((t: any) => t.listId === listId && t.isActive !== false);
-      }
-
-      const createdTasks: any[] = [];
-      for (const t of templates) {
-        const newTask = await storage.createTask({
-          templateId: t.id,
-          title: t.title,
-          description: t.description ?? null,
-          storeId: targetStoreId,
-          assigneeType: t.assigneeType ?? "store_wide",
-          assigneeId: t.assigneeId ?? null,
-          status: taskStatusEnum.PENDING,
-          priority: t.priority ?? "medium",
-          photoRequired: !!t.photoRequired,
-          photoCount: t.photoCount ?? 1,
-          scheduledFor: new Date(),
-          notes: null,
+      if (existingTemplate) {
+        return res.status(409).json({
+          message: "Template already exists",
+          template: existingTemplate,
         });
-        createdTasks.push(newTask);
       }
 
-      res.status(201).json({ created: createdTasks.length, tasks: createdTasks });
+      // Create new template
+      const row = await storage.createTaskTemplate({
+        listId,
+        title: String(b.title || "Task"),
+        description: b.description ?? null,
+        storeId: null,
+        createdBy: me.id,
+        recurrenceType: null,
+        recurrencePattern: null,
+        estimatedDuration: null,
+        assigneeType: b.assigneeId ? "specific_employee" : "store_wide",
+        assigneeId: b.assigneeId ?? null,
+        photoRequired: !!b.photoRequired || Number(b.photoCount ?? 0) > 0,
+        photoCount: Number(b.photoCount ?? 0),
+        priority: b.priority ?? "normal",
+        isActive: true,
+      });
+
+      res.status(201).json(row); // clearly indicates creation
     } catch (err: any) {
-      res.status(500).json({ message: err?.message || "Failed to run list" });
+      res.status(500).json({ message: err?.message || "Failed to create template" });
     }
   }
 );
+
+
+
 
 // Ensure today's task exists for a given template
 router.post("/task-lists/:id/ensure-task", authenticateToken, async (req, res) => {

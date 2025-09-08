@@ -354,46 +354,39 @@ export const analyticsApi = {
    API – Check-ins (geofence)
    ========= */
 
-export interface CheckInStatus {
-  checkedIn: boolean;
-  storeId?: number | null;
-  at?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  radiusM?: number | null;
-}
+  export interface CheckInStatus {
+    checkedIn: boolean;
+    storeId?: number | null;
+    at?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    radiusM?: number | null;
+  }
 
-export const checkinApi = {
-  // Legacy shape kept for compatibility (some pages may not use this).
-  status(): Promise<CheckInStatus> {
-    // If you later add a status route, swap it here.
-    // For now return a neutral status object to avoid breaking callers.
-    return Promise.resolve({ checkedIn: false });
-  },
+  // Simple in-memory mock to track check-in status on client
+  let lastCheckin: CheckInStatus = { checkedIn: false };
 
-  // Old signature
-  checkIn(coords: { latitude: number; longitude: number }): Promise<CheckInStatus> {
-    // Kept to avoid breaking callers; server requires storeId – prefer checkInToStore.
-    return apiRequest<CheckInStatus>("POST", "/api/auth/checkin", {
-      latitude: coords.latitude,
-      longitude: coords.longitude,
-      // storeId should be supplied with checkInToStore
-    });
-  },
+  export const checkinApi = {
+    status(): Promise<CheckInStatus> {
+      return Promise.resolve(lastCheckin);
+    },
 
-  // Recommended: explicit store
-  checkInToStore(storeId: number, coords: { latitude: number; longitude: number }): Promise<{ success: true }> {
-    return apiRequest<{ success: true }>("POST", "/api/auth/checkin", {
-      storeId,
-      latitude: coords.latitude,
-      longitude: coords.longitude,
-    });
-  },
+    checkInToStore(storeId: number, coords: { latitude: number; longitude: number }): Promise<{ success: true }> {
+      lastCheckin = {
+        checkedIn: true,
+        storeId,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        at: new Date().toISOString(),
+      };
+      return Promise.resolve({ success: true });
+    },
 
-  checkOut(): Promise<{ success: true }> {
-    return apiRequest<{ success: true }>("POST", "/api/auth/checkout");
-  },
-};
+    checkOut(): Promise<{ success: true }> {
+      lastCheckin = { checkedIn: false };
+      return Promise.resolve({ success: true });
+    },
+  };
 
 /* =========
    Task Lists (original + enhanced helpers)
