@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { authApi } from "@/lib/authApi";
 
 type TemplateItem = {
   id: number;
@@ -258,6 +259,29 @@ export default function TaskListRunPage() {
     if (window.history.length > 1) window.history.back();
     else setLocation(LISTS_URL);
   };
+
+  // Check-in mutation
+  const doCheckIn = useMutation({
+    mutationFn: async (coords: { latitude: number; longitude: number }) => {
+      const targetStoreId = isAdmin && selectedStoreId ? selectedStoreId : user?.storeId;
+      if (!targetStoreId) {
+        throw new Error("Store ID required for check-in");
+      }
+      const res = await authApi.checkInToStore(targetStoreId, coords);
+      return res;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["checkin-status"] });
+      toast({ title: "Checked in successfully" });
+    },
+    onError: (e: any) => {
+      toast({
+        title: "Check-in failed",
+        description: String(e?.message || e),
+        variant: "destructive",
+      });
+    },
+  });
 
   return (
     <div className="p-4 md:p-6">
