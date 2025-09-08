@@ -617,6 +617,7 @@ router.put(
 );
 
 // Delete template
+/*
 router.delete(
   "/task-lists/templates/:templateId",
   authenticateToken,
@@ -630,7 +631,7 @@ router.delete(
       res.status(500).json({ message: err?.message || "Failed to delete template" });
     }
   }
-);
+);*/
 
 /* ============== TASK LIST RUN / TODAY / ENSURE ============== */
 router.post(
