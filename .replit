@@ -40,6 +40,10 @@ externalPort = 3002
 localPort = 5178
 externalPort = 4200
 
+[[ports]]
+localPort = 35171
+externalPort = 5173
+
 [env]
 
 [workflows]
