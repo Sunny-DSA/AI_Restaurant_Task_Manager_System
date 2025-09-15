@@ -29,12 +29,12 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [rememberAdmin, setRememberAdmin] = useState(true);
+  const [rememberAdmin, setRememberAdmin] = useState(false);
 
   // Store/Employee creds
   const [storeId, setStoreId] = useState("");
   const [pin, setPin] = useState("");
-  const [rememberStore, setRememberStore] = useState(true);
+  const [rememberStore, setRememberStore] = useState(false);
   const [showQR, setShowQR] = useState(false);
 
   // Redirect after successful auth
@@ -53,10 +53,11 @@ export default function LoginPage() {
     }
   }, [tab]);
 
-  console.log("storeid", storeId );
-
   // --- Error sanitizer ---
-  const friendly = (err: unknown, fallback = "Login failed. Please try again.") => {
+  const friendly = (
+    err: unknown,
+    fallback = "Login failed. Please try again.",
+  ) => {
     const raw =
       err && typeof err === "object" && "message" in err
         ? String((err as any).message)
@@ -65,7 +66,8 @@ export default function LoginPage() {
     if (jsonMatch) {
       try {
         const obj = JSON.parse(jsonMatch[0]);
-        if (obj && typeof obj.message === "string" && obj.message.trim()) return obj.message;
+        if (obj && typeof obj.message === "string" && obj.message.trim())
+          return obj.message;
       } catch {}
     }
     const stripped = raw.replace(/^\s*\d{3}\s+[A-Za-z ]+:\s*/, "").trim();
@@ -100,7 +102,10 @@ export default function LoginPage() {
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
             (pos) => {
-              coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+              coords = {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              };
               login({
                 storeId: Number(storeId),
                 pin,
@@ -115,7 +120,7 @@ export default function LoginPage() {
                 pin,
                 rememberMe: rememberStore,
               }).catch(showError);
-            }
+            },
           );
           return; // prevent double submit
         }
@@ -130,7 +135,17 @@ export default function LoginPage() {
     } catch (e) {
       showError(e);
     }
-  }, [tab, email, password, rememberAdmin, storeId, pin, rememberStore, login, toast]);
+  }, [
+    tab,
+    email,
+    password,
+    rememberAdmin,
+    storeId,
+    pin,
+    rememberStore,
+    login,
+    toast,
+  ]);
 
   return (
     <div className="relative min-h-screen flex items-center justify-center bg-background">
@@ -165,7 +180,12 @@ export default function LoginPage() {
                 <>
                   <div>
                     <Label htmlFor="email">Email</Label>
-                    <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+                    <Input
+                      id="email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
                   </div>
                   <div>
                     <Label htmlFor="password">Password</Label>
@@ -183,12 +203,20 @@ export default function LoginPage() {
                         onClick={() => setShowPw((s) => !s)}
                         aria-label={showPw ? "Hide password" : "Show password"}
                       >
-                        {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        {showPw ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
                   </div>
                   <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={rememberAdmin} onChange={(e) => setRememberAdmin(e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={rememberAdmin}
+                      onChange={(e) => setRememberAdmin(e.target.checked)}
+                    />
                     Remember me
                   </label>
                 </>
@@ -196,25 +224,49 @@ export default function LoginPage() {
                 <>
                   <div>
                     <Label htmlFor="storeId">Store ID</Label>
-                    <Input id="storeId" value={storeId} onChange={(e) => setStoreId(e.target.value)} inputMode="numeric" />
+                    <Input
+                      id="storeId"
+                      value={storeId}
+                      onChange={(e) => setStoreId(e.target.value)}
+                      inputMode="numeric"
+                    />
                   </div>
                   <div>
                     <Label htmlFor="pin">Employee PIN</Label>
-                    <Input id="pin" value={pin} onChange={(e) => setPin(e.target.value)} inputMode="numeric" />
+                    <Input
+                      id="pin"
+                      value={pin}
+                      onChange={(e) => setPin(e.target.value)}
+                      inputMode="numeric"
+                    />
                   </div>
 
                   <div className="flex items-center justify-between">
                     <label className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" checked={rememberStore} onChange={(e) => setRememberStore(e.target.checked)} />
+                      <input
+                        type="checkbox"
+                        checked={rememberStore}
+                        onChange={(e) => setRememberStore(e.target.checked)}
+                      />
                       Remember me
                     </label>
-                    <Button type="button" variant="outline" onClick={() => setShowQR(true)}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setShowQR(true)}
+                    >
                       <QrCode className="w-4 h-4 mr-2" />
                       Scan QR
                     </Button>
                   </div>
 
-                  <QRScanner isOpen={showQR} onClose={() => setShowQR(false)} onSuccess={(scannedStoreId) => setStoreId(String(scannedStoreId))} />
+                  <QRScanner
+                    isOpen={showQR}
+                    onClose={() => setShowQR(false)}
+                    onSuccess={(scannedStoreId) =>
+                      setStoreId(String(scannedStoreId))
+                    }
+                  />
                 </>
               )}
             </CardContent>

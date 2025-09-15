@@ -6,8 +6,17 @@ import cors from "cors";
 import routes from "./routes";
 import { createServer } from "http";
 import { setupVite, serveStatic } from "./vite";
-
+import uploadsRouter from "./routes/uploads";
+import photosRouter from "./routes/photos";
+import adminRouter from "./routes/admin";
 const app = express();
+
+const isDev = process.env.NODE_ENV !== "production";
+
+
+app.use("/api", uploadsRouter);
+app.use("/api/photos", photosRouter);
+app.use("/api", adminRouter);
 
 app.use(
   cors({
@@ -27,9 +36,9 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: "lax",
-      secure: false, // set true behind HTTPS in production
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      sameSite: isDev ? "lax" : "none",   // ✅ dev: lax, prod: none
+      secure: !isDev,                     // ✅ dev: false, prod: true
+      maxAge: 7 * 24 * 60 * 60 * 1000,    // 1 week
     },
   })
 );
@@ -47,8 +56,12 @@ app.use("/api", routes);
 
 // last-resort error handler (e.g., Multer)
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  if (err?.code === "LIMIT_FILE_SIZE") return res.status(413).json({ message: "File too large. Max 10MB." });
-  if (err?.message === "Only image files are allowed") return res.status(415).json({ message: err.message });
+  if (err?.code === "LIMIT_FILE_SIZE") {
+    return res.status(413).json({ message: "File too large. Max 10MB." });
+  }
+  if (err?.message === "Only image files are allowed") {
+    return res.status(415).json({ message: err.message });
+  }
   if (err) {
     console.error("Unhandled error:", err);
     return res.status(500).json({ message: err.message || "Internal server error" });
@@ -56,18 +69,17 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   res.end();
 });
 
-const isDev = process.env.NODE_ENV !== "production";
 const PORT = Number(process.env.PORT) || 5000;
 
 async function startServer() {
   const server = createServer(app);
-  
+
   if (isDev) {
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
-  
+
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server listening on http://0.0.0.0:${PORT}`);
   });

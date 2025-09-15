@@ -13,18 +13,21 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export async function apiRequest<T = any>(
   method: HttpMethod,
   url: string,
-  body?: unknown
+  body?: unknown,
 ): Promise<T> {
   const res = await fetch(url, {
     method,
     credentials: "include",
-    headers: body instanceof FormData ? undefined : { "Content-Type": "application/json" },
+    headers:
+      body instanceof FormData
+        ? undefined
+        : { "Content-Type": "application/json" },
     body:
       body === undefined
         ? undefined
         : body instanceof FormData
-        ? body
-        : JSON.stringify(body),
+          ? body
+          : JSON.stringify(body),
   });
 
   let payload: any;
@@ -36,12 +39,17 @@ export async function apiRequest<T = any>(
   }
 
   if (!res.ok) {
+    // ✅ Special case for /api/auth/me
+    if (res.status === 401 && url.includes("/api/auth/me")) {
+      return null as T; // treat "unauthorized" as "no user" instead of throwing
+    }
+
     const serverMsg =
       typeof payload?.message === "string"
         ? payload.message
         : typeof payload?.error === "string"
-        ? payload.error
-        : undefined;
+          ? payload.error
+          : undefined;
 
     const fallbackByStatus: Record<number, string> = {
       400: "Please check your input and try again.",
@@ -54,7 +62,9 @@ export async function apiRequest<T = any>(
     };
 
     const friendly =
-      serverMsg || fallbackByStatus[res.status] || "Something went wrong. Please try again.";
+      serverMsg ||
+      fallbackByStatus[res.status] ||
+      "Something went wrong. Please try again.";
 
     const error = new Error(friendly) as Error & { status?: number };
     error.status = res.status;
@@ -213,7 +223,8 @@ export const taskApi = {
     const params = new URLSearchParams();
     if (filters?.storeId) params.append("storeId", String(filters.storeId));
     if (filters?.status) params.append("status", filters.status);
-    if (filters?.assigneeId) params.append("assigneeId", String(filters.assigneeId));
+    if (filters?.assigneeId)
+      params.append("assigneeId", String(filters.assigneeId));
     if (filters?.scheduledDate) {
       const v =
         filters.scheduledDate instanceof Date
@@ -237,15 +248,30 @@ export const taskApi = {
     return apiRequest<Task>("POST", `/api/tasks/${taskId}/claim`, location);
   },
 
-  transferTask(taskId: number, toUserId: number, reason?: string): Promise<any> {
-    return apiRequest("POST", `/api/tasks/${taskId}/transfer`, { toUserId, reason });
+  transferTask(
+    taskId: number,
+    toUserId: number,
+    reason?: string,
+  ): Promise<any> {
+    return apiRequest("POST", `/api/tasks/${taskId}/transfer`, {
+      toUserId,
+      reason,
+    });
   },
 
   completeTask(
     taskId: number,
-    options?: { notes?: string; forceComplete?: boolean; overridePhotoRequirement?: boolean }
+    options?: {
+      notes?: string;
+      forceComplete?: boolean;
+      overridePhotoRequirement?: boolean;
+    },
   ): Promise<Task> {
-    return apiRequest<Task>("POST", `/api/tasks/${taskId}/complete`, options ?? {});
+    return apiRequest<Task>(
+      "POST",
+      `/api/tasks/${taskId}/complete`,
+      options ?? {},
+    );
   },
 
   createTask(taskData: CreateTaskPayload): Promise<Task | Task[]> {
@@ -272,7 +298,7 @@ export const taskApi = {
     taskId: number,
     file: File,
     location?: Coords,
-    taskItemId?: number
+    taskItemId?: number,
   ): Promise<any> {
     const form = new FormData();
     form.append("photo", file);
@@ -304,10 +330,16 @@ export const storeApi = {
     return apiRequest<Store>("PUT", `/api/stores/${id}`, updates);
   },
   generateQR(storeId: number): Promise<{ qrCode: string }> {
-    return apiRequest<{ qrCode: string }>("POST", `/api/stores/${storeId}/generate-qr`);
+    return apiRequest<{ qrCode: string }>(
+      "POST",
+      `/api/stores/${storeId}/generate-qr`,
+    );
   },
   getStoreStats(storeId: number): Promise<TaskStats & UserStats> {
-    return apiRequest<TaskStats & UserStats>("GET", `/api/stores/${storeId}/stats`);
+    return apiRequest<TaskStats & UserStats>(
+      "GET",
+      `/api/stores/${storeId}/stats`,
+    );
   },
 };
 
@@ -337,12 +369,19 @@ export const userApi = {
    ========= */
 
 export const analyticsApi = {
-  getTaskStats(storeId?: number, dateFrom?: Date, dateTo?: Date): Promise<TaskStats> {
+  getTaskStats(
+    storeId?: number,
+    dateFrom?: Date,
+    dateTo?: Date,
+  ): Promise<TaskStats> {
     const params = new URLSearchParams();
     if (storeId) params.append("storeId", String(storeId));
     if (dateFrom) params.append("dateFrom", dateFrom.toISOString());
     if (dateTo) params.append("dateTo", dateTo.toISOString());
-    return apiRequest<TaskStats>("GET", `/api/analytics/tasks?${params.toString()}`);
+    return apiRequest<TaskStats>(
+      "GET",
+      `/api/analytics/tasks?${params.toString()}`,
+    );
   },
   getUserStats(storeId?: number): Promise<UserStats> {
     const params = storeId ? `?storeId=${storeId}` : "";
@@ -354,39 +393,42 @@ export const analyticsApi = {
    API – Check-ins (geofence)
    ========= */
 
-  export interface CheckInStatus {
-    checkedIn: boolean;
-    storeId?: number | null;
-    at?: string | null;
-    latitude?: number | null;
-    longitude?: number | null;
-    radiusM?: number | null;
-  }
+export interface CheckInStatus {
+  checkedIn: boolean;
+  storeId?: number | null;
+  at?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  radiusM?: number | null;
+}
 
-  // Simple in-memory mock to track check-in status on client
-  let lastCheckin: CheckInStatus = { checkedIn: false };
+// Simple in-memory mock to track check-in status on client
+let lastCheckin: CheckInStatus = { checkedIn: false };
 
-  export const checkinApi = {
-    status(): Promise<CheckInStatus> {
-      return Promise.resolve(lastCheckin);
-    },
+export const checkinApi = {
+  status(): Promise<CheckInStatus> {
+    return Promise.resolve(lastCheckin);
+  },
 
-    checkInToStore(storeId: number, coords: { latitude: number; longitude: number }): Promise<{ success: true }> {
-      lastCheckin = {
-        checkedIn: true,
-        storeId,
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-        at: new Date().toISOString(),
-      };
-      return Promise.resolve({ success: true });
-    },
+  checkInToStore(
+    storeId: number,
+    coords: { latitude: number; longitude: number },
+  ): Promise<{ success: true }> {
+    lastCheckin = {
+      checkedIn: true,
+      storeId,
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      at: new Date().toISOString(),
+    };
+    return Promise.resolve({ success: true });
+  },
 
-    checkOut(): Promise<{ success: true }> {
-      lastCheckin = { checkedIn: false };
-      return Promise.resolve({ success: true });
-    },
-  };
+  checkOut(): Promise<{ success: true }> {
+    lastCheckin = { checkedIn: false };
+    return Promise.resolve({ success: true });
+  },
+};
 
 /* =========
    Task Lists (original + enhanced helpers)
@@ -487,7 +529,12 @@ export const taskListApi = {
       photoRequired?: boolean;
       photoCount?: number;
       priority?: "low" | "normal" | "high";
-      items?: Array<{ title: string; description?: string; photoRequired?: boolean; sortOrder?: number }>;
+      items?: Array<{
+        title: string;
+        description?: string;
+        photoRequired?: boolean;
+        sortOrder?: number;
+      }>;
     }>;
     assignToMyStore?: boolean;
   }): Promise<{ success: true; listId: number }> {
@@ -498,7 +545,13 @@ export const taskListApi = {
   async importOneList(opts: {
     title: string;
     description?: string;
-    items: Array<{ title: string; description?: string; photoRequired?: boolean; photoCount?: number; assigneeId?: number }>;
+    items: Array<{
+      title: string;
+      description?: string;
+      photoRequired?: boolean;
+      photoCount?: number;
+      assigneeId?: number;
+    }>;
     defaultPhotoRequired?: boolean;
     defaultPhotoCount?: number;
   }): Promise<{ ok: boolean; created: number; lists: any[] }> {
@@ -531,7 +584,10 @@ export const taskListApi = {
     return apiRequest<TaskList>("GET", `/api/task-lists/${id}`);
   },
   getTemplates(listId: number): Promise<TaskTemplate[]> {
-    return apiRequest<TaskTemplate[]>("GET", `/api/task-lists/${listId}/templates`);
+    return apiRequest<TaskTemplate[]>(
+      "GET",
+      `/api/task-lists/${listId}/templates`,
+    );
   },
 
   // ----- NEW: today’s tasks for a list+store (employees don’t need “Run”)
@@ -549,13 +605,13 @@ export const taskListApi = {
   ensureTask(
     listId: number,
     templateId: number,
-    storeId?: number
+    storeId?: number,
   ): Promise<EnsureTaskResponse> {
     const qs = storeId ? `?storeId=${storeId}` : "";
     return apiRequest<EnsureTaskResponse>(
       "POST",
       `/api/task-lists/${listId}/ensure-task${qs}`,
-      { templateId }
+      { templateId },
     );
   },
 
@@ -563,18 +619,46 @@ export const taskListApi = {
   ensureTaskViaBody(
     listId: number,
     templateId: number,
-    storeId?: number
+    storeId?: number,
   ): Promise<EnsureTaskResponse> {
     const qs = storeId ? `?storeId=${storeId}` : "";
     return apiRequest<EnsureTaskResponse>(
       "POST",
       `/api/task-lists/${listId}/ensure-task${qs}`,
-      { templateId }
+      { templateId },
     );
   },
 
   // ----- update a task list (e.g., to bind a list to a store after import)
   updateList(id: number, payload: UpdateTaskListPayload): Promise<any> {
     return apiRequest<any>("PUT", `/api/task-lists/${id}`, payload);
+  },
+};
+
+/* =========
+   NEW: Admin previews + photo URL helper (added, non-breaking)
+   ========= */
+
+export interface AdminTaskPreview {
+  id: number;
+  title: string;
+  description?: string | null;
+  created_at: string;
+  created_by_name?: string | null;
+  created_by_role?: string | null;
+  preview_photo_id?: number | null;
+  subtask_count: number;
+  done_count: number;
+}
+
+export const adminApi = {
+  getTaskPreviews(): Promise<AdminTaskPreview[]> {
+    return apiRequest<AdminTaskPreview[]>("GET", "/api/admin/task-previews");
+  },
+};
+
+export const photosApi = {
+  url(id: number | null | undefined): string | null {
+    return typeof id === "number" ? `/api/photos/${id}` : null;
   },
 };

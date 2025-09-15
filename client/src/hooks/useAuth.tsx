@@ -15,7 +15,13 @@ type LoginArgs =
   | { email: string; password: string; rememberMe?: boolean }
   | { storeId: number; pin: string; rememberMe?: boolean; latitude?: number; longitude?: number };
 
-type VerifyQRArgs = { qrData: string };
+type VerifyQRArgs = { qrData: string; latitude?: number; longitude?: number };
+
+type QRVerifyResult = { 
+  success: boolean; 
+  storeId: number; 
+  storeName: string; 
+};
 
 type AuthCtx = {
   user: User | null;
@@ -23,8 +29,8 @@ type AuthCtx = {
   isAuthenticated: boolean;
   isLoggingIn: boolean;
   isVerifyingQR: boolean;
-  login: (args: LoginArgs) => Promise<void>;
-  verifyQR: (args: VerifyQRArgs) => Promise<void>;
+  login: (args: LoginArgs) => Promise<User>;
+  verifyQR: (args: VerifyQRArgs) => Promise<QRVerifyResult>;
   logout: () => Promise<void>;
 };
 
@@ -72,11 +78,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const verifyQR = useCallback(async (args: VerifyQRArgs) => {
+  const verifyQR = useCallback(async (args: VerifyQRArgs): Promise<QRVerifyResult> => {
     setIsVerifyingQR(true);
     try {
-      await apiRequest("POST", "/api/auth/verify-qr", args);
-      // no state change by default; your Login page may parse storeId from QR
+      const response = await apiRequest<QRVerifyResult>("POST", "/api/auth/verify-qr", args);
+      return response;
     } finally {
       setIsVerifyingQR(false);
     }

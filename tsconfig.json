@@ -20,6 +20,6 @@
       "@server/*": ["server/*"]
     }
   },
-  "include": ["client", "server", "shared", "vite.config.ts", "postcss.config.js", "tailwind.config.ts", "drizzle.config.ts"],
+  "include": ["client", "server", "shared", "scripts", "vite.config.ts", "postcss.config.js", "tailwind.config.ts", "drizzle.config.ts"],
   "exclude": ["dist", "node_modules"]
 }

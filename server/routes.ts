@@ -1,12 +1,16 @@
 // server/routes.ts
 import { Router, Request, Response } from "express";
-import { roleEnum, taskStatusEnum } from "@shared/schema";
+import { roleEnum, taskStatusEnum, taskPhotos, taskLists, taskTemplates, tasks } from "@shared/schema"; // ← added taskPhotos, taskLists
 import { authenticateToken, requireRole } from "./middleware/auth";
 import { requireActiveCheckin } from "./middleware/requireCheckin";
 import { upload } from "./middleware/upload";
 import { withinFence } from "./utils/geo";
 import { storage } from "./storage";
 import { AuthService } from "./services/authService";
+
+// NEW: DB tools
+import { db } from "./db";
+import { eq, sql, desc } from "drizzle-orm";
 
 /** Geofence toggle (production default = on) */
 const ENFORCE_GEOFENCE =
@@ -292,7 +296,26 @@ router.post(
           ? Number(me.storeId)
           : undefined,
       });
-      res.status(201).json(list);
+
+      // NEW (Step 2f): denormalize creator name/role directly in DB
+      try {
+        await db.update(taskLists)
+          .set({
+            createdByName: (me.firstName ?? null) as any,
+            createdByRole: (me.role ?? null) as any,
+          } as any)
+          .where(eq(taskLists.id, list.id));
+      } catch (e) {
+        console.warn("Optional denormalization failed:", e);
+      }
+
+
+      // respond with the new fields too
+      res.status(201).json({
+        ...list,
+        createdByName: me.firstName ?? null,
+        createdByRole: me.role,
+      });
     } catch (err: any) {
       res.status(400).json({ message: err?.message || "Failed to create task list" });
     }
@@ -602,8 +625,6 @@ router.post(
   }
 );
 
-
-
 // Update one template
 router.put(
   "/task-lists/templates/:templateId",
@@ -633,22 +654,7 @@ router.put(
   }
 );
 
-// Delete template
-/*
-router.delete(
-  "/task-lists/templates/:templateId",
-  authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
-  async (req, res) => {
-    try {
-      const id = Number(req.params.templateId);
-      await storage.deleteTaskTemplate(id);
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ message: err?.message || "Failed to delete template" });
-    }
-  }
-);*?
+// (There is a second /task-lists/:id/templates POST further down in original code; keeping as-is)
 
 /* ============== TASK LIST RUN / TODAY / ENSURE ============== */
 router.post(
@@ -695,9 +701,6 @@ router.post(
     }
   }
 );
-
-
-
 
 // Ensure today's task exists for a given template
 router.post("/task-lists/:id/ensure-task", authenticateToken, async (req, res) => {
@@ -927,6 +930,7 @@ router.delete(
 );
 
 /* ============== PHOTOS & COMPLETE ============== */
+// CHANGED: persist image BYTES to DB instead of filesystem URL
 router.post(
   "/tasks/:id/photos",
   authenticateToken,
@@ -967,22 +971,30 @@ router.post(
       const f = req.file as Express.Multer.File | undefined;
       if (!f) return res.status(400).json({ message: "No photo uploaded" });
 
-      const url = `/uploads/${f.filename}`;
-      await storage.createTaskPhoto({
-        taskId: id,
-        taskItemId: req.body?.taskItemId ? Number(req.body.taskItemId) : undefined,
-        url,
-        filename: f.originalname || f.filename,
-        mimeType: f.mimetype,
-        fileSize: f.size,
-        latitude: lat,
-        longitude: lng,
-        uploadedBy: user.id,
-      });
+      const url = null; // legacy unused
+      const [row] = await db
+        .insert(taskPhotos)
+        .values({
+          taskId: id,
+          taskItemId: req.body?.taskItemId ? Number(req.body.taskItemId) : null,
+          filename: f.originalname || f.filename,
+          mimeType: f.mimetype,
+          fileSize: f.size,
+          data: f.buffer,
+          latitude: lat ?? null,
+          longitude: lng ?? null,
+          uploadedBy: user.id,
+          uploadedByName: user.firstName ?? null,
+          uploadedByRole: user.role,
+          url,
+        } as any)
+        .returning({ id: taskPhotos.id });
 
-      const newCount = have + 1;
+      const newCount = Number(task.photosUploaded ?? 0) + 1;
       await storage.updateTask(id, { photosUploaded: newCount });
-      res.json({ success: true, photoUrl: url, photosUploaded: newCount, photoCount: need });
+
+      res.json({ success: true, photoId: row?.id, photosUploaded: newCount, photoCount: Number(task.photoCount ?? 0) });
+
     } catch (err: any) {
       res.status(500).json({ message: err?.message || "Upload failed" });
     }
@@ -1036,6 +1048,27 @@ router.post(
     }
   }
 );
+
+// === Raw image bytes for previews (3c) ===
+router.get("/photos/:id/raw", authenticateToken, async (req, res) => {
+  const photoId = Number(req.params.id);
+  if (!Number.isFinite(photoId)) return res.status(400).json({ message: "Invalid id" });
+
+  const [p] = await db
+    .select({
+      data: taskPhotos.data,
+      mimeType: taskPhotos.mimeType,
+    })
+    .from(taskPhotos)
+    .where(eq(taskPhotos.id, photoId))
+    .limit(1);
+
+  if (!p || !p.data) return res.status(404).json({ message: "Not found" });
+
+  res.setHeader("Content-Type", p.mimeType || "image/jpeg");
+  res.end(Buffer.from(p.data), "binary");
+});
+
 
 /* ============== STORES ============== */
 router.get("/stores", authenticateToken, async (req, res) => {
@@ -1153,6 +1186,55 @@ router.post(
     } catch (err: any) {
       res.status(500).json({ message: err?.message || "Failed to generate QR code" });
     }
+  }
+);
+
+/* ============== NEW: Serve photo bytes & Admin previews ============== */
+
+// Stream photo bytes from DB
+router.get("/photos/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return res.sendStatus(400);
+
+  const [p] = await db.select().from(taskPhotos).where(eq(taskPhotos.id, id)).limit(1);
+  if (!p?.data) return res.sendStatus(404);
+
+  res.setHeader("Content-Type", p.mimeType ?? "application/octet-stream");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.end(Buffer.from(p.data));
+});
+
+// === Admin preview feed (3d): last 50 uploads (role-gated) ===
+router.get(
+  "/admin/task-previews",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
+  async (req, res) => {
+    const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+
+    const rows = await db
+      .select({
+        photoId: taskPhotos.id,
+        uploadedAt: taskPhotos.uploadedAt,
+        filename: taskPhotos.filename,
+        mimeType: taskPhotos.mimeType,
+        uploadedByName: taskPhotos.uploadedByName,
+        uploadedByRole: taskPhotos.uploadedByRole,
+        taskId: tasks.id,
+        storeId: tasks.storeId,
+        templateId: taskTemplates.id,
+        listId: taskLists.id,
+        listName: taskLists.name,
+      })
+      .from(taskPhotos)
+      .leftJoin(tasks, eq(taskPhotos.taskId, tasks.id))
+      .leftJoin(taskTemplates, eq(tasks.templateId, taskTemplates.id))
+      .leftJoin(taskLists, eq(taskTemplates.listId, taskLists.id))
+      .where(storeId ? (eq(tasks.storeId, storeId) as any) : (undefined as any)) // keep builder happy
+      .orderBy(desc(taskPhotos.uploadedAt))
+      .limit(50);
+
+    res.json(rows);
   }
 );
 

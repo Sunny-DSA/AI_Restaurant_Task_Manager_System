@@ -23,16 +23,17 @@ export function useWebSocket() {
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws`;
-    
+
     try {
       const ws = new WebSocket(wsUrl);
+      // Use this URL for connection to the WebSocket server
       wsRef.current = ws;
 
       ws.onopen = () => {
         setIsConnected(true);
         // Authenticate with the WebSocket server
         ws.send(JSON.stringify({ type: "auth", userId: user.id }));
-        
+
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current);
         }
@@ -41,18 +42,20 @@ export function useWebSocket() {
       ws.onmessage = (event) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
-          
+
           switch (message.type) {
             case "auth_success":
               // WebSocket authenticated successfully
               break;
-              
+
             case "task_update":
               // Invalidate task-related queries to refetch data
               queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
               queryClient.invalidateQueries({ queryKey: ["/api/tasks/my"] });
-              queryClient.invalidateQueries({ queryKey: ["/api/tasks/available"] });
-              
+              queryClient.invalidateQueries({
+                queryKey: ["/api/tasks/available"],
+              });
+
               // Show notification for relevant task updates
               if (message.task) {
                 const task = message.task;
@@ -61,7 +64,10 @@ export function useWebSocket() {
                     title: "Task Updated",
                     description: `Your task "${task.title}" has been updated`,
                   });
-                } else if (task.assigneeId === user.id || task.assigneeType === "store_wide") {
+                } else if (
+                  task.assigneeId === user.id ||
+                  task.assigneeType === "store_wide"
+                ) {
                   toast({
                     title: "New Task Available",
                     description: `Task "${task.title}" is now available`,
@@ -69,7 +75,7 @@ export function useWebSocket() {
                 }
               }
               break;
-              
+
             case "notification":
               // Handle real-time notifications
               if (message.notification) {
@@ -77,16 +83,19 @@ export function useWebSocket() {
                   title: message.notification.title,
                   description: message.notification.message,
                 });
-                
+
                 // Invalidate notifications query
-                queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+                queryClient.invalidateQueries({
+                  queryKey: ["/api/notifications"],
+                });
               }
               break;
-              
+
             default:
-              // Unknown message type, silently ignore in production
+            // Unknown message type, silently ignore in production
           }
         } catch (error) {
+           console.error("Failed to create WebSocket connection", error);
           // Error parsing WebSocket message, silently handle in production
         }
       };
@@ -94,7 +103,7 @@ export function useWebSocket() {
       ws.onclose = () => {
         setIsConnected(false);
         wsRef.current = null;
-        
+
         // Attempt to reconnect after a delay
         if (user?.id) {
           reconnectTimeoutRef.current = setTimeout(() => {
@@ -103,11 +112,12 @@ export function useWebSocket() {
         }
       };
 
-      ws.onerror = (error) => {
+      ws.onerror = (_error) => {
         // WebSocket error occurred, silently handle in production
         setIsConnected(false);
       };
-    } catch (error) {
+    } catch //(error) 
+    {
       // Failed to create WebSocket connection, silently handle in production
     }
   };
@@ -116,12 +126,12 @@ export function useWebSocket() {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
     }
-    
+
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-    
+
     setIsConnected(false);
   };
 

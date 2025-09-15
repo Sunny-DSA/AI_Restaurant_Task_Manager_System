@@ -6,8 +6,15 @@
   "scripts": {
     "dev": "tsx watch server/index.ts",
     "build": "vite build",
-    "start": "NODE_ENV=production tsx server/index.ts"
-  },
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "seed": "tsx server/scripts/seed.ts",
+    "verify-seed": "tsx server/scripts/verify-seed.ts",
+
+    "drizzle:generate": "drizzle-kit generate",
+    "drizzle:push": "drizzle-kit push",
+    "drizzle:studio": "drizzle-kit studio --port 4983"
+  }
+,
   "dependencies": {
     "@hookform/resolvers": "3.10.0",
     "@jridgewell/trace-mapping": "0.3.30",
@@ -49,7 +56,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
-    "connect-pg-simple": "10.0.0",
+    "connect-pg-simple": "^10.0.0",
     "cors": "2.8.5",
     "date-fns": "3.6.0",
     "drizzle-orm": "0.39.3",

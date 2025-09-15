@@ -14,7 +14,11 @@ export const roleColors: Record<string, string> = {
 };
 
 // keep the old modules, but add a dedicated "task_lists" module
-export function hasPermission(userRole: string, action: string, module: string): boolean {
+export function hasPermission(
+  userRole: string,
+  action: string,
+  module: string,
+): boolean {
   const permissions: Record<string, Record<string, string[]>> = {
     master_admin: {
       stores: ["create", "read", "update", "delete"],
