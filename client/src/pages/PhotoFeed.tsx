@@ -1,50 +1,35 @@
-import { useEffect, useState } from "react";
-
-type Row = {
-  photoId: number;
-  uploadedAt: string;
-  filename: string;
-  mimeType: string;
-  uploadedByName?: string | null;
-  uploadedByRole?: string | null;
-  url?: string | null;       // data URL returned by API
-  taskId?: number | null;
-  listName?: string | null;
-  storeId?: number | null;
-};
+import { useQuery } from "@tanstack/react-query";
+import { adminApi } from "@/lib/api";
+import PhotoFeedItem from "@/components/PhotoFeedItem";
 
 export default function PhotoFeed() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/admin/task-previews", { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(j?.message || r.statusText))))
-      .then(setRows)
-      .catch((e) => setErr(String(e)));
-  }, []);
+  const { data: feed = [], isLoading, error } = useQuery({
+    queryKey: ["/api/admin/photo-feed"],
+    queryFn: () => adminApi.photoFeed({ limit: 50 }),
+    refetchInterval: 15000, // auto-refresh every 15s
+  });
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">Recent Photo Uploads</h1>
-      {err && <div className="text-red-600 mb-4">{err}</div>}
-      <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-        {rows.map((r) => (
-          <div key={r.photoId} className="border rounded-lg p-3">
-            {r.url ? (
-              <img src={r.url} alt={r.filename} className="w-full h-48 object-cover rounded" />
-            ) : (
-              <div className="w-full h-48 bg-gray-100 flex items-center justify-center rounded">No preview</div>
-            )}
-            <div className="mt-3 text-sm">
-              <div className="font-medium">{r.filename}</div>
-              <div className="text-gray-600">{new Date(r.uploadedAt).toLocaleString()}</div>
-              <div className="text-gray-600">{r.uploadedByName ?? "Unknown"} ({r.uploadedByRole ?? "user"})</div>
-              {r.listName && <div className="text-gray-600">List: {r.listName}</div>}
-              {r.taskId && <div className="text-gray-600">Task #{r.taskId}</div>}
-            </div>
-          </div>
+    <div className="p-6 max-w-6xl mx-auto space-y-4">
+      <h1 className="text-2xl font-semibold">Recent Photo Uploads</h1>
+
+      {isLoading && (
+        <div className="text-sm text-muted-foreground">Loading…</div>
+      )}
+
+      {error && (
+        <div className="text-sm text-destructive">
+          {(error as Error)?.message || "Failed to load photo feed"}
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {feed.map((it) => (
+          <PhotoFeedItem key={it.id} item={it} />
         ))}
+        {!isLoading && feed.length === 0 && (
+          <div className="text-sm text-muted-foreground">No uploads yet.</div>
+        )}
       </div>
     </div>
   );

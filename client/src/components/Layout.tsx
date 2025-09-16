@@ -1,3 +1,4 @@
+// client/src/components/Layout.tsx
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
@@ -33,6 +34,11 @@ const navigation = [
   { name: "Reports", href: "/reports", icon: BarChart3, key: "reports" },
 ];
 
+// Extra page titles that aren’t in the main `navigation` array
+const extraTitles: Record<string, string> = {
+  "/admin/photos": "Photo Feed",
+};
+
 export default function Layout({ children }: LayoutProps) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
@@ -45,12 +51,14 @@ export default function Layout({ children }: LayoutProps) {
   }
 
   const filteredNavigation = navigation.filter((item) =>
-    canAccessPage(user.role, item.key)
+    canAccessPage(user.role, item.key),
   );
 
   const getPageTitle = () => {
     const currentPage = navigation.find((item) => item.href === location);
-    return currentPage?.name || "Dashboard";
+    if (currentPage?.name) return currentPage.name;
+    if (extraTitles[location]) return extraTitles[location];
+    return "Dashboard";
   };
 
   const getUserInitials = () => {
@@ -81,9 +89,15 @@ export default function Layout({ children }: LayoutProps) {
   const isEmployeeOrManager =
     user.role === "employee" || user.role === "store_manager";
 
+  // Build mobile items: all permitted nav + optional Photo Feed
+  const mobileNav = [
+    ...filteredNavigation,
+    ...(isAdmin ? [{ name: "Photo Feed", href: "/admin/photos", icon: List, key: "photo-feed" } as const] : []),
+  ];
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
-      {/* Sidebar */}
+      {/* Sidebar (desktop) */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0">
         <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 shadow-lg">
           {/* App name/logo */}
@@ -198,9 +212,7 @@ export default function Layout({ children }: LayoutProps) {
             <div className="flex items-center space-x-2 md:space-x-4">
               {/* WebSocket status dot */}
               <div
-                className={`w-2 h-2 rounded-full ${
-                  isConnected ? "bg-green-500" : "bg-red-500"
-                }`}
+                className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
                 title={isConnected ? "Connected" : "Disconnected"}
               />
 
@@ -219,12 +231,7 @@ export default function Layout({ children }: LayoutProps) {
               {showThemeToggle && <ThemeToggle />}
 
               {/* Notifications */}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="relative"
-                aria-label="Notifications"
-              >
+              <Button variant="ghost" size="sm" className="relative" aria-label="Notifications">
                 <Bell className="h-5 w-5" />
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
                   3
@@ -234,9 +241,7 @@ export default function Layout({ children }: LayoutProps) {
               {/* Mobile avatar */}
               <div className="md:hidden">
                 <Avatar className="h-8 w-8">
-                  <AvatarFallback className="text-xs">
-                    {getUserInitials()}
-                  </AvatarFallback>
+                  <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
                 </Avatar>
               </div>
             </div>
@@ -246,20 +251,21 @@ export default function Layout({ children }: LayoutProps) {
         <main className="flex-1 pb-20 md:pb-0">{children}</main>
       </div>
 
+      {/* Mobile bottom nav – horizontally scrollable, shows ALL items (plus Photo Feed for admins) */}
       {isMobile && (
         <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 z-50">
-          <div className="flex justify-around py-2">
-            {filteredNavigation.slice(0, 4).map((item) => {
+          <div className="flex gap-2 px-2 py-2 overflow-x-auto no-scrollbar">
+            {mobileNav.map((item) => {
               const isActive = location === item.href;
               return (
-                <Link key={item.name} href={item.href}>
+                <Link key={item.href} href={item.href}>
                   <button
-                    className={`flex flex-col items-center py-2 px-4 ${
+                    className={`flex flex-col items-center min-w-[72px] px-3 py-1.5 rounded-md ${
                       isActive ? "text-primary" : "text-gray-500 dark:text-gray-400"
                     }`}
                   >
                     <item.icon className="h-5 w-5 mb-1" />
-                    <span className="text-xs font-medium">{item.name}</span>
+                    <span className="text-xs font-medium truncate">{item.name}</span>
                   </button>
                 </Link>
               );

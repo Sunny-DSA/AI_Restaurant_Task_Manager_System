@@ -1,3 +1,4 @@
+// server/routes/taskLists.ts
 import { Router, Request, Response } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth";
 import { storage } from "../storage";
@@ -26,20 +27,16 @@ r.get("/task-lists/:id", authenticateToken, async (req: Request, res: Response) 
   }
 });
 
+// ⛔️ CREATE = ADMINS ONLY
 r.post(
   "/task-lists",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const me = (req as any).user!;
       const b = req.body ?? {};
-      if (me.role === roleEnum.STORE_MANAGER) {
-        if (!me.storeId) return res.status(400).json({ message: "Store assignment required" });
-        if (b.storeId && Number(b.storeId) !== Number(me.storeId)) {
-          return res.status(403).json({ message: "Cannot create lists for another store" });
-        }
-      }
+
       const list = await storage.createTaskList({
         name: b.name ?? b.title,
         description: b.description ?? null,
@@ -48,11 +45,7 @@ r.post(
         recurrenceType: b.recurrenceType ?? null,
         recurrencePattern: b.recurrencePattern ?? null,
         createdBy: me.id,
-        storeId: b.storeId
-          ? Number(b.storeId)
-          : me.role === roleEnum.STORE_MANAGER
-          ? Number(me.storeId)
-          : undefined,
+        storeId: b.storeId != null ? Number(b.storeId) : undefined,
       });
 
       res.status(201).json({
@@ -66,18 +59,15 @@ r.post(
   }
 );
 
+// ⛔️ UPDATE = ADMINS ONLY
 r.put(
   "/task-lists/:id",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
-      const me = (req as any).user!;
       const id = Number(req.params.id);
       const b = req.body ?? {};
-      if (me.role === roleEnum.STORE_MANAGER && b.storeId && Number(b.storeId) !== Number(me.storeId)) {
-        return res.status(403).json({ message: "Cannot assign lists to another store" });
-      }
       const updated = await storage.updateTaskList(id, {
         name: b.name ?? b.title,
         description: b.description,
@@ -95,10 +85,11 @@ r.put(
   }
 );
 
+// ⛔️ DELETE = ADMINS ONLY
 r.delete(
   "/task-lists/:id",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -111,7 +102,7 @@ r.delete(
   }
 );
 
-// Templates for a list
+// Templates for a list (🔐 ADMINS ONLY to create/update)
 r.get("/task-lists/:id/templates", authenticateToken, async (req: Request, res: Response) => {
   try {
     const listId = Number(req.params.id);
@@ -126,11 +117,10 @@ r.get("/task-lists/:id/templates", authenticateToken, async (req: Request, res: 
   }
 });
 
-// Create one template
 r.post(
   "/task-lists/:id/templates",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const listId = Number(req.params.id);
@@ -161,11 +151,10 @@ r.post(
   }
 );
 
-// Update one template
 r.put(
   "/task-lists/templates/:templateId",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.templateId);
@@ -190,9 +179,8 @@ r.put(
   }
 );
 
-/* ========= NEW for run page ========= */
+/* ========= Run-page helpers (unchanged) ========= */
 
-// Today’s tasks for a list + store (no auto-create here)
 r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Response) => {
   try {
     const me = (req as any).user!;
@@ -220,7 +208,6 @@ r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Resp
   }
 });
 
-// Ensure today’s task exists for a given template + store
 r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, res: Response) => {
   try {
     const me = (req as any).user!;
@@ -231,12 +218,10 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
     const qStoreId = req.query.storeId ? Number(req.query.storeId) : me.storeId;
     if (!qStoreId) return res.status(400).json({ message: "storeId required" });
 
-    // load template and validate
     const all = await storage.getTaskTemplates();
     const template = (all || []).find((t: any) => t.id === templateId && t.listId === listId);
     if (!template) return res.status(404).json({ message: "Template not found in this list" });
 
-    // return existing today’s task if present
     const allTasks = await storage.getTasks({ storeId: qStoreId });
     const today = new Date().toISOString().slice(0, 10);
     const existing = (allTasks || []).find((t: any) => {
@@ -245,7 +230,6 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
     });
     if (existing) return res.json(existing);
 
-    // create
     const newTask = await storage.createTask({
       templateId,
       title: template.title,
@@ -267,14 +251,13 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
   }
 });
 
-// server/routes/tasklists.ts (or wherever your task list routes live)
+// Minimal import stub (admins only)
 r.post(
   "/task-lists/import",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req, res) => {
     try {
-      // very minimal stub that creates one list from "sections[0]"
       const b = req.body ?? {};
       const section = (b.sections && b.sections[0]) || {};
       const name = String(section.title || b.list?.name || "New List");
@@ -288,11 +271,8 @@ r.post(
         recurrenceType: b.recurrenceType ?? null,
         recurrencePattern: b.recurrencePattern ?? null,
         createdBy: me.id,
-        // optional: storeId binding if you want to attach to manager's store
-        storeId: me.storeId ?? undefined,
+        storeId: b.storeId != null ? Number(b.storeId) : undefined,
       });
-
-      // (optional) you can also iterate section.items here to create templates
 
       res.status(201).json({ ok: true, created: 1, lists: [{ id: list.id }] });
     } catch (e: any) {
@@ -300,6 +280,5 @@ r.post(
     }
   }
 );
-
 
 export default r;

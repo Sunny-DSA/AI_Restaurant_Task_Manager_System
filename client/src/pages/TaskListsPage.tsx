@@ -1,4 +1,5 @@
-import React, { useMemo, useRef, useState } from "react";
+// client/src/pages/TaskListRunPage.tsx
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Camera, Check, Lock } from "lucide-react";
@@ -7,7 +8,6 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import { checkinApi } from "@/lib/api";
 
 type TemplateItem = {
   id: number;
@@ -18,11 +18,20 @@ type TemplateItem = {
 };
 type TemplateSection = { title: string; items: TemplateItem[] };
 
-const LISTS_URL = "/tasklists";
+type TodayTask = {
+  id: number;
+  templateId: number;
+  status: string; // "completed" etc.
+  photoCount?: number | null;
+  photosUploaded?: number | null;
+};
+
+const LISTS_URL = "/task-lists";
 
 export default function TaskListRunPage() {
-  const [, params] = useRoute("/tasklists/run/:id");
-  const listId = Number(params?.id);
+  // ✅ Use the correct route pattern, and param typing to silence TS
+  const [, params] = useRoute<{ id: string }>("/task-lists/run/:id");
+  const listId = Number(params?.id ?? 0);
   const [, setLocation] = useLocation();
 
   const { user } = useAuth();
@@ -36,7 +45,7 @@ export default function TaskListRunPage() {
   );
 
   /* -------- list + templates -------- */
-  const { data: list } = useQuery({
+  const { data: list } = useQuery<any>({
     queryKey: ["/api/task-lists", listId],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
@@ -46,17 +55,17 @@ export default function TaskListRunPage() {
     },
   });
 
-  const { data: templates = [] as TemplateItem[] } = useQuery({
+  const { data: templates = [] } = useQuery<TemplateItem[]>({
     queryKey: ["/api/task-lists", listId, "templates"],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
       const r = await fetch(`/api/task-lists/${listId}/templates`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
-      return r.json();
+      return r.json() as Promise<TemplateItem[]>;
     },
   });
 
-  const { data: stores = [] } = useQuery({
+  const { data: stores = [] } = useQuery<any[]>({
     queryKey: ["/api/stores"],
     enabled: isAdmin,
     queryFn: async () => {
@@ -79,6 +88,7 @@ export default function TaskListRunPage() {
       checked: boolean;
     };
   };
+
   const initial: Runtime = useMemo(() => {
     const o: Runtime = {};
     for (const t of templates) {
@@ -91,34 +101,41 @@ export default function TaskListRunPage() {
     }
     return o;
   }, [templates]);
+
   const [state, setState] = useState<Runtime>(initial);
 
-  // Load today's tasks (so users can act without anyone pressing "run")
-  useQuery({
+  // Load today's tasks (react-query v5: no onSuccess in options — derive in effect)
+  const { data: todayTasks = [] } = useQuery<TodayTask[]>({
     queryKey: ["/api/task-lists", listId, "today", selectedStoreId],
     enabled: Number.isFinite(listId) && !!selectedStoreId,
     queryFn: async () => {
-      const r = await fetch(`/api/task-lists/${listId}/tasks?storeId=${selectedStoreId}`, {
+      const sid = selectedStoreId;
+      const r = await fetch(`/api/task-lists/${listId}/tasks?storeId=${sid}`, {
         credentials: "include",
       });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<any[]>;
-    },
-    onSuccess: (tasks) => {
-      const next: Runtime = { ...initial };
-      for (const t of tasks || []) {
-        const tid = Number(t.templateId);
-        if (!tid) continue;
-        next[tid] = {
-          taskId: Number(t.id),
-          required: Math.max(0, Number(t.photoCount ?? 0)),
-          photos: Number(t.photosUploaded ?? 0),
-          checked: t.status === "completed",
-        };
-      }
-      setState(next);
+      return r.json() as Promise<TodayTask[]>;
     },
   });
+
+  useEffect(() => {
+    if (!todayTasks?.length) {
+      setState(initial);
+      return;
+    }
+    const next: Runtime = { ...initial };
+    for (const t of todayTasks) {
+      const tid = Number(t.templateId);
+      if (!tid) continue;
+      next[tid] = {
+        taskId: Number(t.id),
+        required: Math.max(0, Number(t.photoCount ?? 0)),
+        photos: Number(t.photosUploaded ?? 0),
+        checked: t.status === "completed",
+      };
+    }
+    setState(next);
+  }, [todayTasks, initial]);
 
   const totals = useMemo(() => {
     const ids = Object.keys(state);
@@ -126,7 +143,8 @@ export default function TaskListRunPage() {
     return { total: ids.length, done };
   }, [state]);
 
-  const canComplete = totals.total > 0 &&
+  const canComplete =
+    totals.total > 0 &&
     totals.done === totals.total &&
     Object.values(state).every((t) => t.photos >= t.required);
 
@@ -137,7 +155,7 @@ export default function TaskListRunPage() {
       const url = sid != null ? `/api/task-lists/${listId}/run?storeId=${sid}` : `/api/task-lists/${listId}/run`;
       const r = await fetch(url, { method: "POST", credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ created: number; tasks: any[] }>;
+      return r.json() as Promise<{ created: number; tasks: TodayTask[] }>;
     },
     onSuccess: (out) => {
       const next: Runtime = { ...initial };
@@ -152,7 +170,6 @@ export default function TaskListRunPage() {
         };
       }
       setState(next);
-      // also refresh “today”
       qc.invalidateQueries({ queryKey: ["/api/task-lists", listId, "today", selectedStoreId] });
     },
     onError: (e: any) => {
@@ -232,13 +249,19 @@ export default function TaskListRunPage() {
 
   const onPickPhoto = async (templateId: number, file: File | null) => {
     if (!file) return;
+
+    // Admin must choose a store first
+    if (isAdmin && !selectedStoreId) {
+      toast({ title: "Choose a store", description: "Pick a store before uploading photos." });
+      return;
+    }
+
     let rt = state[templateId];
 
     // If today's tasks aren’t provisioned yet, provision them now (idempotent)
     if (!rt?.taskId) {
       await ensureRun.mutateAsync();
-      rt = (safestate => safestate[templateId]) (state);
-      rt = state[templateId]; // refresh local
+      rt = state[templateId];
     }
     if (!rt?.taskId) {
       toast({ title: "No task ready", description: "Could not prepare today's task for this list." });
@@ -259,29 +282,6 @@ export default function TaskListRunPage() {
     if (window.history.length > 1) window.history.back();
     else setLocation(LISTS_URL);
   };
-
-  // Check-in mutation
-  const doCheckIn = useMutation({
-    mutationFn: async (coords: { latitude: number; longitude: number }) => {
-      const targetStoreId = isAdmin && selectedStoreId ? selectedStoreId : user?.storeId;
-      if (!targetStoreId) {
-        throw new Error("Store ID required for check-in");
-      }
-      const res = await checkinApi.checkInToStore(targetStoreId, coords);
-      return res;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["checkin-status"] });
-      toast({ title: "Checked in successfully" });
-    },
-    onError: (e: any) => {
-      toast({
-        title: "Check-in failed",
-        description: String(e?.message || e),
-        variant: "destructive",
-      });
-    },
-  });
 
   return (
     <div className="p-4 md:p-6">
@@ -385,6 +385,7 @@ export default function TaskListRunPage() {
                         ref={(el) => (fileInputs.current[it.id] = el)}
                         type="file"
                         accept="image/*"
+                        capture="environment"
                         className="hidden"
                         onChange={(e) => onPickPhoto(it.id, e.target.files?.[0] ?? null)}
                       />

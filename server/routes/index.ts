@@ -6,18 +6,18 @@ import tasksRoutes from "./tasks";
 import taskListsRoutes from "./taskLists";
 import adminRoutes from "./admin";
 import photosRoutes from "./photos";
-// import uploadsRoutes from "./uploads";
+import checkinsRoutes from "./checkins"; // ✅ NEW: exposes /api/checkins/me
 
 const router = Router();
 
-// NOTE: no prefixes here; the files use absolute paths already.
+// NOTE: no prefixes here; each file uses absolute paths already.
 router.use(authRoutes);
+router.use(checkinsRoutes); // ← lightweight status endpoint used by the client
 router.use(usersRoutes);
 router.use(storesRoutes);
 router.use(tasksRoutes);
 router.use(taskListsRoutes);
 router.use(adminRoutes);
 router.use(photosRoutes);
-// router.use(uploadsRoutes);
 
 export default router;

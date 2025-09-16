@@ -41,7 +41,7 @@ export async function apiRequest<T = any>(
   if (!res.ok) {
     // ✅ Special case for /api/auth/me
     if (res.status === 401 && url.includes("/api/auth/me")) {
-      return null as T; // treat "unauthorized" as "no user" instead of throwing
+      return null as T;
     }
 
     const serverMsg =
@@ -90,8 +90,8 @@ export interface Task {
   claimedBy?: number;
   completedBy?: number;
 
-  status: string; // "pending" | "available" | "claimed" | "in_progress" | "completed" | "overdue"
-  priority: string; // "low" | "medium" | "high"
+  status: string;
+  priority: string;
   scheduledFor?: string;
   dueAt?: string;
   claimedAt?: string;
@@ -358,7 +358,6 @@ export const userApi = {
   resetPin(userId: number): Promise<{ pin: string }> {
     return apiRequest<{ pin: string }>("PUT", `/api/users/${userId}/reset-pin`);
   },
-  // Set exact 4-digit PIN (admin/manager only)
   setPin(userId: number, pin: string) {
     return apiRequest<{ ok: true }>("PUT", `/api/users/${userId}/pin`, { pin });
   },
@@ -382,14 +381,16 @@ export const analyticsApi = {
       "GET",
       `/api/analytics/tasks?${params.toString()}`,
     );
-  },
+    },
   getUserStats(storeId?: number): Promise<UserStats> {
     const params = storeId ? `?storeId=${storeId}` : "";
     return apiRequest<UserStats>("GET", `/api/analytics/users${params}`);
   },
 };
 
-// --- replace the existing in-memory mock in client/src/lib/api.ts ---
+/* =========
+   API – Check-ins (geofence)
+   ========= */
 
 export interface CheckInStatus {
   checkedIn: boolean;
@@ -402,14 +403,14 @@ export interface CheckInStatus {
 
 export const checkinApi = {
   status(): Promise<CheckInStatus> {
-    return apiRequest<CheckInStatus>("GET", "/api/auth/checkin/status");
+    return apiRequest<CheckInStatus>("GET", "/api/checkins/me");
   },
 
   checkInToStore(
     storeId: number,
-    coords: { latitude: number; longitude: number }
+    coords: { latitude: number; longitude: number },
   ): Promise<{ success: true }> {
-    return apiRequest("POST", "/api/auth/checkin", {
+    return apiRequest<{ success: true }>("POST", "/api/auth/checkin", {
       storeId,
       latitude: coords.latitude,
       longitude: coords.longitude,
@@ -417,7 +418,7 @@ export const checkinApi = {
   },
 
   checkOut(): Promise<{ success: true }> {
-    return apiRequest("POST", "/api/auth/checkout");
+    return apiRequest<{ success: true }>("POST", "/api/auth/checkout");
   },
 };
 
@@ -452,7 +453,7 @@ export interface TaskTemplate {
 export type CreateTaskListPayload = {
   name: string;
   description?: string;
-  storeId?: number; // optional; backend will infer for store managers
+  storeId?: number;
   assigneeType?: string;
   assigneeId?: number;
   recurrenceType?: string;
@@ -460,7 +461,7 @@ export type CreateTaskListPayload = {
 };
 
 export type UpdateTaskListPayload = Partial<CreateTaskListPayload> & {
-  name?: string; // allow rename specifically
+  name?: string;
 };
 
 // --- Convenience payload for the /api/task-lists/import "sections" format
@@ -479,7 +480,6 @@ export type TaskListImportSectionsPayload = {
       assigneeId?: number;
     }>;
   }>;
-  // optional defaults when items omit explicit photo rules
   defaultPhotoRequired?: boolean;
   defaultPhotoCount?: number;
 };
@@ -491,7 +491,7 @@ export type EnsureTaskResponse = {
 };
 
 export const taskListApi = {
-  // ----- existing endpoints (kept as-is)
+  // basic endpoints
   getLists(): Promise<any[]> {
     return apiRequest<any[]>("GET", "/api/task-lists");
   },
@@ -504,8 +504,6 @@ export const taskListApi = {
   duplicateList(id: number): Promise<any> {
     return apiRequest<any>("POST", `/api/task-lists/${id}/duplicate`);
   },
-
-  
 
   import(payload: {
     list: {
@@ -534,7 +532,7 @@ export const taskListApi = {
     return apiRequest("POST", "/api/task-lists/import", payload);
   },
 
-  // ----- NEW: convenience import using "sections" (matches server routes)
+  // sections helpers
   async importOneList(opts: {
     title: string;
     description?: string;
@@ -563,7 +561,6 @@ export const taskListApi = {
     return apiRequest("POST", "/api/task-lists/import", body);
   },
 
-  // ----- NEW: import via sections with full control
   importSections(payload: TaskListImportSectionsPayload): Promise<{
     ok?: boolean;
     created?: number;
@@ -572,7 +569,6 @@ export const taskListApi = {
     return apiRequest("POST", "/api/task-lists/import", payload);
   },
 
-  // ----- NEW: fetch one list & its templates
   getList(id: number): Promise<TaskList> {
     return apiRequest<TaskList>("GET", `/api/task-lists/${id}`);
   },
@@ -583,18 +579,15 @@ export const taskListApi = {
     );
   },
 
-  // ----- NEW: today’s tasks for a list+store (employees don’t need “Run”)
   getTodayTasks(listId: number, storeId: number): Promise<any[]> {
     const qs = new URLSearchParams({ storeId: String(storeId) }).toString();
     return apiRequest<any[]>("GET", `/api/task-lists/${listId}/tasks?${qs}`);
   },
 
-  // alias – same as getTodayTasks for readability
   getListTasksForStoreToday(listId: number, storeId: number) {
     return this.getTodayTasks(listId, storeId);
   },
 
-  // ----- ensure today’s task exists – use body-based route for compatibility
   ensureTask(
     listId: number,
     templateId: number,
@@ -608,7 +601,6 @@ export const taskListApi = {
     );
   },
 
-  // also expose explicit body-based call (same as ensureTask above)
   ensureTaskViaBody(
     listId: number,
     templateId: number,
@@ -622,14 +614,13 @@ export const taskListApi = {
     );
   },
 
-  // ----- update a task list (e.g., to bind a list to a store after import)
   updateList(id: number, payload: UpdateTaskListPayload): Promise<any> {
     return apiRequest<any>("PUT", `/api/task-lists/${id}`, payload);
   },
 };
 
 /* =========
-   NEW: Admin previews + photo URL helper (added, non-breaking)
+   NEW: Admin previews + photo feed
    ========= */
 
 export interface AdminTaskPreview {
@@ -644,9 +635,37 @@ export interface AdminTaskPreview {
   done_count: number;
 }
 
+export interface AdminPhotoFeedItem {
+  id: number; // photo id
+  taskId: number | null;
+  taskItemId: number | null;
+  uploadedAt: string;
+  uploadedBy: number | null;
+  uploadedByName: string | null;
+  uploadedByRole: string | null;
+  photoUrl: string;
+  store: {
+    id: number;
+    name: string | null;
+    center: { lat: number; lng: number } | null;
+    radiusM: number | null;
+  } | null;
+  gps: { latitude: number; longitude: number } | null;
+  distanceM: number | null;
+  quality: "inside" | "near" | "outside" | "unknown";
+}
+
 export const adminApi = {
   getTaskPreviews(): Promise<AdminTaskPreview[]> {
     return apiRequest<AdminTaskPreview[]>("GET", "/api/admin/task-previews");
+  },
+
+  photoFeed(opts?: { storeId?: number; limit?: number }): Promise<AdminPhotoFeedItem[]> {
+    const qs = new URLSearchParams();
+    if (opts?.storeId) qs.append("storeId", String(opts.storeId));
+    if (opts?.limit) qs.append("limit", String(Math.min(200, Math.max(1, opts.limit))));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiRequest<AdminPhotoFeedItem[]>("GET", `/api/admin/photo-feed${suffix}`);
   },
 };
 

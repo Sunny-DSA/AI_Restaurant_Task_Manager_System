@@ -4,11 +4,7 @@ import { authenticateToken } from "../middleware/auth";
 import { withinFence } from "../utils/geo";
 import { storage } from "../storage";
 import { AuthService } from "../services/authService";
-
-const ENFORCE_GEOFENCE =
-  process.env.ENFORCE_GEOFENCE !== undefined
-    ? process.env.ENFORCE_GEOFENCE === "true"
-    : process.env.NODE_ENV === "production";
+import { ENFORCE_GEOFENCE } from "../env";
 
 const r = Router();
 
@@ -17,6 +13,9 @@ r.post("/auth/login", async (req: Request, res: Response) => {
   try {
     const { email, password, pin, storeId, rememberMe, latitude, longitude } = req.body ?? {};
     let user: any;
+
+    // Small debug to confirm flags coming from env.ts
+    console.log("[auth/login] ENFORCE_GEOFENCE:", ENFORCE_GEOFENCE);
 
     if (email && password) {
       try {
@@ -65,14 +64,12 @@ r.post("/auth/login", async (req: Request, res: Response) => {
     if (rememberMe === true) req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
 
     return res.json({
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role,
-      storeId: user.storeId,
+      id: user.id, email: user.email,
+      firstName: user.firstName, lastName: user.lastName,
+      role: user.role, storeId: user.storeId,
     });
-  } catch {
+  } catch (e) {
+    console.error("[auth/login] error:", e);
     return res.status(500).json({ message: "Unexpected error during login. Please try again." });
   }
 });
@@ -120,26 +117,17 @@ r.post("/auth/checkin", authenticateToken, async (req: Request, res: Response) =
   const store = await storage.getStore(Number(storeId));
   if (!store) return res.status(404).json({ message: "Store not found" });
 
-  if (store.latitude != null && store.longitude != null && store.geofenceRadius) {
+  // Optional geofence enforcement at check-in (enabled by flag)
+  if (ENFORCE_GEOFENCE && store.latitude != null && store.longitude != null && store.geofenceRadius) {
     const lat = Number(latitude), lng = Number(longitude);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return res.status(400).json({ message: "Location required for geofenced check-in" });
     }
-
-    // 👇 DEBUG: log inputs + decision
-    const center = { lat: Number(store.latitude), lng: Number(store.longitude) };
-    const radiusM = Number(store.geofenceRadius);
-    const point = { lat, lng };
-    const ok = withinFence(point, center, radiusM);
-    console.log("[CHECKIN]", {
-      userId: user.id,
-      storeId: Number(storeId),
-      point,
-      center,
-      radiusM,
-      withinFence: ok,
-    });
-
+    const ok = withinFence(
+      { lat, lng },
+      { lat: Number(store.latitude), lng: Number(store.longitude) },
+      Number(store.geofenceRadius)
+    );
     if (!ok) return res.status(403).json({ message: "Outside store geofence" });
   }
 
@@ -155,31 +143,23 @@ r.post("/auth/checkin", authenticateToken, async (req: Request, res: Response) =
     startedAt: new Date().toISOString(),
   };
 
-  console.log("[CHECKIN] saved session.activeCheckin =", (req as any).session.activeCheckin); // 👈 DEBUG
+  // Debug snapshot
+  console.log("[auth/checkin] activeCheckin set:", (req as any).session.activeCheckin);
 
   if ((storage as any).setActiveCheckin) (storage as any).setActiveCheckin(user.id, (req as any).session.activeCheckin);
   res.json({ success: true });
 });
 
+r.post("/auth/checkout", authenticateToken, async (req: Request, res: Response) => {
+  const user = (req as any).user as { id: number } | undefined;
+  if (!user?.id) return res.status(401).json({ message: "Unauthenticated" });
+  (req as any).session.activeCheckin = undefined;
 
-/** NEW: Check-in status for UI (TaskListRunPage / CheckInControl expect this) */
-r.get("/checkins/me", authenticateToken, (req: Request, res: Response) => {
-  const active = (req as any).session?.activeCheckin as
-    | { storeId: number; storeName?: string; fence?: { lat: number; lng: number; radiusM: number }; startedAt?: string }
-    | undefined;
+  // Debug checkout
+  console.log("[auth/checkout] activeCheckin cleared for user", user.id);
 
-  if (active) {
-    return res.json({
-      checkedIn: true,
-      storeId: active.storeId,
-      storeName: active.storeName,
-      fence: active.fence ?? null,
-      at: active.startedAt,
-    });
-  }
-  return res.json({ checkedIn: false });
+  if ((storage as any).clearActiveCheckin) (storage as any).clearActiveCheckin(user.id);
+  res.json({ success: true });
 });
-
-
 
 export default r;
