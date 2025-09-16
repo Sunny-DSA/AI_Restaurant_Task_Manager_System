@@ -6,9 +6,19 @@ import { canAccessPage } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Bell, Home, CheckSquare, List, Store, Users, BarChart3, Settings } from "lucide-react";
+import {
+  Bell,
+  Home,
+  CheckSquare,
+  List,
+  Store,
+  Users,
+  BarChart3,
+  Settings,
+} from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import ThemeToggle from "@/components/ThemeToggle";
+import CheckinControl from "@/components/CheckinControl";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -67,6 +77,10 @@ export default function Layout({ children }: LayoutProps) {
     }
   };
 
+  const isAdmin = user.role === "admin" || user.role === "master_admin";
+  const isEmployeeOrManager =
+    user.role === "employee" || user.role === "store_manager";
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
       {/* Sidebar */}
@@ -79,8 +93,12 @@ export default function Layout({ children }: LayoutProps) {
                 <Store className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">RestaurantTask</h1>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Task Management</p>
+                <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+                  RestaurantTask
+                </h1>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Task Management
+                </p>
               </div>
             </div>
           </div>
@@ -104,6 +122,22 @@ export default function Layout({ children }: LayoutProps) {
                 </Link>
               );
             })}
+
+            {/* Admin-only: Photo Feed */}
+            {isAdmin && (
+              <Link href="/admin/photos">
+                <button
+                  className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-lg ${
+                    location === "/admin/photos"
+                      ? "bg-primary/10 text-primary"
+                      : "text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+                  }`}
+                >
+                  <List className="mr-3 h-5 w-5" />
+                  Photo Feed
+                </button>
+              </Link>
+            )}
           </nav>
 
           {/* User footer */}
@@ -113,16 +147,36 @@ export default function Layout({ children }: LayoutProps) {
                 <AvatarFallback>{getUserInitials()}</AvatarFallback>
               </Avatar>
               <div className="ml-3 flex-1">
-                <p className="text-sm font-medium">{user.firstName} {user.lastName}</p>
+                <p className="text-sm font-medium">
+                  {user.firstName} {user.lastName}
+                </p>
                 {user?.role && (
-                  <Badge variant="secondary" className={`text-xs ${getRoleColor()}`}>
+                  <Badge
+                    variant="secondary"
+                    className={`text-xs ${getRoleColor()}`}
+                  >
                     {user.role.replace("_", " ")}
                   </Badge>
                 )}
               </div>
-              <Button variant="ghost" size="sm" onClick={() => logout()} aria-label="Log out">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => logout()}
+                aria-label="Log out"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                  />
                 </svg>
               </Button>
             </div>
@@ -140,14 +194,20 @@ export default function Layout({ children }: LayoutProps) {
                 Welcome back, {user.firstName || "User"}
               </p>
             </div>
+
             <div className="flex items-center space-x-2 md:space-x-4">
+              {/* WebSocket status dot */}
               <div
                 className={`w-2 h-2 rounded-full ${
                   isConnected ? "bg-green-500" : "bg-red-500"
                 }`}
                 title={isConnected ? "Connected" : "Disconnected"}
               />
-              {/* Toggle button to reveal ThemeToggle */}
+
+              {/* Check-in pill (employees/managers only) */}
+              {isEmployeeOrManager && <CheckinControl />}
+
+              {/* Settings / theme */}
               <Button
                 variant="ghost"
                 size="sm"
@@ -157,15 +217,26 @@ export default function Layout({ children }: LayoutProps) {
                 <Settings className="h-5 w-5" />
               </Button>
               {showThemeToggle && <ThemeToggle />}
-              <Button variant="ghost" size="sm" className="relative" aria-label="Notifications">
+
+              {/* Notifications */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="relative"
+                aria-label="Notifications"
+              >
                 <Bell className="h-5 w-5" />
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
                   3
                 </span>
               </Button>
+
+              {/* Mobile avatar */}
               <div className="md:hidden">
                 <Avatar className="h-8 w-8">
-                  <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
+                  <AvatarFallback className="text-xs">
+                    {getUserInitials()}
+                  </AvatarFallback>
                 </Avatar>
               </div>
             </div>

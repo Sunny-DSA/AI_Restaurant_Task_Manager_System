@@ -1,12 +1,17 @@
 // server/middleware/requireCheckin.ts
 import { Request, Response, NextFunction } from "express";
 
+/**
+ * ON by default. To disable in dev:
+ *   REQUIRE_CHECKIN=false
+ */
 const REQUIRE_CHECKIN =
-  process.env.REQUIRE_CHECKIN !== undefined
-    ? process.env.REQUIRE_CHECKIN === "False"
-    : false; // default ON for safety
+  process.env.REQUIRE_CHECKIN
+    ? String(process.env.REQUIRE_CHECKIN).toLowerCase() !== "false"
+    : true;
 
 export function requireActiveCheckin(req: Request, res: Response, next: NextFunction) {
+  // If disabled, just continue.
   if (!REQUIRE_CHECKIN) return next();
 
   const active = (req as any).session?.activeCheckin as

@@ -5,7 +5,7 @@ import { roleEnum, taskStatusEnum } from "@shared/schema";
 
 const r = Router();
 
-/* ==================== TASK LISTS ==================== */
+// Lists
 r.get("/task-lists", authenticateToken, async (_req: Request, res: Response) => {
   try {
     const lists = await storage.getTaskLists();
@@ -111,7 +111,7 @@ r.delete(
   }
 );
 
-/* ==================== TEMPLATES ==================== */
+// Templates for a list
 r.get("/task-lists/:id/templates", authenticateToken, async (req: Request, res: Response) => {
   try {
     const listId = Number(req.params.id);
@@ -126,6 +126,7 @@ r.get("/task-lists/:id/templates", authenticateToken, async (req: Request, res: 
   }
 });
 
+// Create one template
 r.post(
   "/task-lists/:id/templates",
   authenticateToken,
@@ -160,6 +161,7 @@ r.post(
   }
 );
 
+// Update one template
 r.put(
   "/task-lists/templates/:templateId",
   authenticateToken,
@@ -188,66 +190,37 @@ r.put(
   }
 );
 
-/* ==================== RUN / TODAY / ENSURE ==================== */
+/* ========= NEW for run page ========= */
 
-// Return today's tasks for this list + store (optionally ensure they exist)
+// Today’s tasks for a list + store (no auto-create here)
 r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Response) => {
   try {
     const me = (req as any).user!;
     const listId = Number(req.params.id);
-
-    // choose storeId
     const qStoreId = req.query.storeId ? Number(req.query.storeId) : me.storeId;
     if (!qStoreId) return res.status(400).json({ message: "storeId required" });
 
-    const dateStr = (req.query.date as string | undefined) ?? new Date().toISOString().slice(0, 10);
-    const ensure = String(req.query.ensure || "") === "1";
+    const dateStr = new Date().toISOString().slice(0, 10);
 
-    // Which templates belong to this list
     const allTemplates = await storage.getTaskTemplates();
     const templates = (allTemplates || []).filter((t: any) => t.listId === listId && t.isActive !== false);
-    const templateIds = new Set(templates.map((t: any) => t.id));
+    const templateIds = templates.map((t: any) => t.id);
 
-    // Existing tasks for that store & day
     const allTasks = await storage.getTasks({ storeId: qStoreId });
-    let todayTasks = (allTasks || []).filter((t: any) => {
-      if (!t.templateId || !templateIds.has(t.templateId)) return false;
+    const byList = (allTasks || []).filter((t: any) => {
+      if (!t.templateId || !templateIds.includes(t.templateId)) return false;
       const d = t.scheduledFor ? new Date(t.scheduledFor) : null;
       const dStr = d ? d.toISOString().slice(0, 10) : "";
       return dStr === dateStr;
     });
 
-    // Ensure mode: create tasks for any template missing today
-    if (ensure && templates.length > 0) {
-      const haveByTpl = new Set<number>(todayTasks.map((t: any) => t.templateId).filter(Boolean));
-      const toCreate = templates.filter((tpl: any) => !haveByTpl.has(tpl.id));
-
-      for (const t of toCreate) {
-        const created = await storage.createTask({
-          templateId: t.id,
-          title: t.title,
-          description: t.description ?? null,
-          storeId: qStoreId,
-          assigneeType: t.assigneeId ? "specific_employee" : "store_wide",
-          assigneeId: t.assigneeId ?? null,
-          status: taskStatusEnum.PENDING,
-          priority: t.priority ?? "medium",
-          photoRequired: !!t.photoRequired,
-          photoCount: t.photoCount ?? 1,
-          scheduledFor: new Date(),
-          notes: null,
-        });
-        todayTasks.push(created);
-      }
-    }
-
-    res.json(todayTasks);
+    res.json(byList);
   } catch (err: any) {
     res.status(500).json({ message: err?.message || "Failed to fetch tasks for list" });
   }
 });
 
-// Ensure today's task exists for a given template (used by Run page “Start”)
+// Ensure today’s task exists for a given template + store
 r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, res: Response) => {
   try {
     const me = (req as any).user!;
@@ -255,22 +228,16 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
     const templateId = Number(req.body?.templateId);
     if (!templateId) return res.status(400).json({ message: "templateId required" });
 
-    const list = await storage.getTaskList(listId);
-    if (!list) return res.status(404).json({ message: "Task list not found" });
+    const qStoreId = req.query.storeId ? Number(req.query.storeId) : me.storeId;
+    if (!qStoreId) return res.status(400).json({ message: "storeId required" });
 
-    // pick storeId: admins can pass ?storeId=, others use their store
-    const qStoreId = req.query.storeId ? Number(req.query.storeId) : undefined;
-    const targetStoreId =
-      (me.role === roleEnum.MASTER_ADMIN || me.role === roleEnum.ADMIN) && qStoreId ? qStoreId : me.storeId;
-    if (!targetStoreId) return res.status(400).json({ message: "storeId required" });
-
-    // template must belong to this list
+    // load template and validate
     const all = await storage.getTaskTemplates();
     const template = (all || []).find((t: any) => t.id === templateId && t.listId === listId);
     if (!template) return res.status(404).json({ message: "Template not found in this list" });
 
-    // already exists today?
-    const allTasks = await storage.getTasks({ storeId: targetStoreId });
+    // return existing today’s task if present
+    const allTasks = await storage.getTasks({ storeId: qStoreId });
     const today = new Date().toISOString().slice(0, 10);
     const existing = (allTasks || []).find((t: any) => {
       const dStr = t.scheduledFor ? new Date(t.scheduledFor).toISOString().slice(0, 10) : "";
@@ -278,12 +245,12 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
     });
     if (existing) return res.json(existing);
 
-    // create today's task
+    // create
     const newTask = await storage.createTask({
       templateId,
       title: template.title,
       description: template.description ?? null,
-      storeId: targetStoreId,
+      storeId: qStoreId,
       assigneeType: template.assigneeId ? "specific_employee" : "store_wide",
       assigneeId: template.assigneeId ?? null,
       status: taskStatusEnum.PENDING,
@@ -294,10 +261,45 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
       notes: null,
     });
 
-    return res.status(201).json(newTask);
+    res.status(201).json(newTask);
   } catch (err: any) {
-    return res.status(500).json({ message: err?.message || "Failed to ensure task" });
+    res.status(500).json({ message: err?.message || "Failed to ensure task" });
   }
 });
+
+// server/routes/tasklists.ts (or wherever your task list routes live)
+r.post(
+  "/task-lists/import",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req, res) => {
+    try {
+      // very minimal stub that creates one list from "sections[0]"
+      const b = req.body ?? {};
+      const section = (b.sections && b.sections[0]) || {};
+      const name = String(section.title || b.list?.name || "New List");
+
+      const me = (req as any).user!;
+      const list = await storage.createTaskList({
+        name,
+        description: b.description ?? null,
+        assigneeType: b.assigneeId ? "specific_employee" : "store_wide",
+        assigneeId: b.assigneeId ?? null,
+        recurrenceType: b.recurrenceType ?? null,
+        recurrencePattern: b.recurrencePattern ?? null,
+        createdBy: me.id,
+        // optional: storeId binding if you want to attach to manager's store
+        storeId: me.storeId ?? undefined,
+      });
+
+      // (optional) you can also iterate section.items here to create templates
+
+      res.status(201).json({ ok: true, created: 1, lists: [{ id: list.id }] });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Import failed" });
+    }
+  }
+);
+
 
 export default r;

@@ -1,3 +1,4 @@
+// server/routes/tasks.ts
 import { Router, Request, Response } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth";
 import { requireActiveCheckin } from "../middleware/requireCheckin";
@@ -10,7 +11,55 @@ import { eq } from "drizzle-orm";
 
 const r = Router();
 
+/* ============== Helpers ============== */
+
+type UserLike = {
+  id: number;
+  role: string;
+  storeId?: number | null;
+  firstName?: string | null;
+};
+
+const isAdmin = (u: UserLike) =>
+  u.role === roleEnum.MASTER_ADMIN || u.role === roleEnum.ADMIN;
+
+const isManager = (u: UserLike) => u.role === roleEnum.STORE_MANAGER;
+const isEmployee = (u: UserLike) => u.role === roleEnum.EMPLOYEE;
+
+function canTouchTask(task: any, user: UserLike): boolean {
+  // Admin: full access
+  if (isAdmin(user)) return true;
+
+  // Manager: their store only
+  if (isManager(user)) {
+    if (!user.storeId) return false;
+    return Number(task.storeId) === Number(user.storeId);
+  }
+
+  // Employee:
+  // - store_wide: allowed for same store
+  // - specific_employee: only if assigned to them
+  if (isEmployee(user)) {
+    if (!user.storeId) return false;
+    if (Number(task.storeId) !== Number(user.storeId)) return false;
+
+    if (task.assigneeId) {
+      return Number(task.assigneeId) === Number(user.id);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function nextPhotoLimit(task: any): { needed: number; have: number; allowed: boolean } {
+  const need = Math.max(0, Number(task.photoCount ?? (task.photoRequired ? 1 : 0)));
+  const have = Math.max(0, Number(task.photosUploaded ?? 0));
+  return { needed: need, have, allowed: have < need || need === 0 };
+}
+
 /* ============== TASKS LISTING/CRUD ============== */
+
 r.get("/tasks/my", authenticateToken, async (req: Request, res: Response) => {
   const user = (req as any).user!;
   const rows = await storage.getTasks({ assigneeId: user.id });
@@ -130,50 +179,98 @@ r.delete(
 );
 
 /* ============== PHOTOS & COMPLETE ============== */
-// Store photo as data:URL in DB (no disk writes)
-r.post("/tasks/:id/photos",
+
+// Upload photo (in-DB data URL) with geofence + permission
+r.post(
+  "/tasks/:id/photos",
   authenticateToken,
   requireActiveCheckin,
   upload.single("photo"),
-  async (req, res) => {
-    const id = Number(req.params.id);
-    const user = (req as any).user!;
-    const lat = req.body?.latitude != null ? Number(req.body.latitude) : undefined;
-    const lng = req.body?.longitude != null ? Number(req.body.longitude) : undefined;
+  async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const user = (req as any).user!;
+      const lat = req.body?.latitude != null ? Number(req.body.latitude) : undefined;
+      const lng = req.body?.longitude != null ? Number(req.body.longitude) : undefined;
 
-    const task = await storage.getTask(id);
-    if (!task) return res.status(404).json({ message: "Task not found" });
+      const task = await storage.getTask(id);
+      if (!task) return res.status(404).json({ message: "Task not found" });
 
-    // photo limits, ownership, geofence checks (keep your existing checks)
+      // ---- permissions
+      if (user.role === roleEnum.EMPLOYEE && task.assigneeId && task.assigneeId !== user.id) {
+        return res.status(403).json({ message: "Not your task" });
+      }
+      if (user.role === roleEnum.STORE_MANAGER && user.storeId && task.storeId !== user.storeId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
 
-    const f = req.file as Express.Multer.File | undefined;
-    if (!f) return res.status(400).json({ message: "No photo uploaded" });
+      // ---- enforce required max (if set)
+      const requiredMax = Number(task.photoCount ?? 0);     // required number for this task
+      const have = Number(task.photosUploaded ?? 0);        // already uploaded
+      if (requiredMax > 0 && have >= requiredMax) {
+        return res.status(400).json({ message: `Upload limit reached (${requiredMax}).` });
+      }
 
-    // store as data URL in DB (no disk)
-    const dataUrl = `data:${f.mimetype};base64,${f.buffer.toString("base64")}`;
+      const f = req.file as Express.Multer.File | undefined;
+      if (!f) return res.status(400).json({ message: "No photo uploaded" });
+      if (!f.mimetype?.startsWith("image/")) {
+        return res.status(415).json({ message: "Only image files are allowed" });
+      }
 
-    // insert in DB
-    const { db } = await import("../db");
-    const { taskPhotos } = await import("@shared/schema");
-    const { eq } = await import("drizzle-orm");
+      // ---- geofence: requireActiveCheckin stored a fence snapshot in req
+      const active = (req as any).activeCheckin as
+        | { fence?: { lat: number; lng: number; radiusM: number } }
+        | undefined;
 
-    await db.insert(taskPhotos).values({
-      taskId: id,
-      taskItemId: req.body?.taskItemId ? Number(req.body.taskItemId) : null,
-      url: dataUrl, // <— this is what frontend will render
-      filename: f.originalname || "upload",
-      mimeType: f.mimetype,
-      fileSize: f.size,
-      latitude: lat ?? null,
-      longitude: lng ?? null,
-      uploadedBy: user.id,
-      uploadedByName: (user.firstName ?? null) as any,
-      uploadedByRole: (user.role ?? null) as any,
-    } as any);
+      const fence = active?.fence;
+      const point =
+        Number.isFinite(lat) && Number.isFinite(lng) ? { lat: Number(lat), lng: Number(lng) } : undefined;
 
-    await storage.updateTask(id, { photosUploaded: (task.photosUploaded ?? 0) + 1 });
+      console.log("[PHOTO UPLOAD]", {
+        taskId: id,
+        userId: user.id,
+        have,
+        requiredMax,
+        fence,
+        point,
+      });
 
-    res.json({ success: true });
+      if (fence) {
+        const ok = point && withinFence(point, { lat: fence.lat, lng: fence.lng }, fence.radiusM);
+        if (!ok) {
+          return res.status(403).json({ message: "You must be on store premises to upload photos." });
+        }
+      }
+
+      // ---- store image as data:URL in DB
+      const dataUrl = `data:${f.mimetype};base64,${f.buffer.toString("base64")}`;
+
+      const inserted = await db
+        .insert(taskPhotos)
+        .values({
+          taskId: id,
+          taskItemId: req.body?.taskItemId ? Number(req.body.taskItemId) : null,
+          url: dataUrl,
+          filename: f.originalname || "upload",
+          mimeType: f.mimetype,
+          fileSize: f.size,
+          latitude: lat ?? null,
+          longitude: lng ?? null,
+          uploadedBy: user.id,
+          uploadedByName: (user.firstName ?? null) as any,
+          uploadedByRole: (user.role ?? null) as any,
+        } as any)
+        .returning({ id: taskPhotos.id });
+
+      // ---- increment counter, but never exceed max
+      const newCount = requiredMax > 0 ? Math.min(have + 1, requiredMax) : have + 1;
+      await storage.updateTask(id, { photosUploaded: newCount });
+
+      res.json({ success: true, photoId: inserted?.[0]?.id, photosUploaded: newCount, required: requiredMax });
+    } catch (err: any) {
+      console.error("Upload error:", err);
+      res.status(500).json({ message: err?.message || "Upload failed" });
+    }
   }
 );
 
@@ -185,15 +282,17 @@ r.post(
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
-      const user = (req as any).user!;
+      const user = (req as any).user as UserLike;
       const { latitude, longitude, overridePhotoRequirement, notes } = req.body ?? {};
       const task = await storage.getTask(id);
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      if (user.role === roleEnum.EMPLOYEE) {
-        if (task.assigneeId && task.assigneeId !== user.id) return res.status(403).json({ message: "Not your task" });
-        const need = task.photoCount ?? 1;
-        const have = task.photosUploaded ?? 0;
+      if (!canTouchTask(task, user)) return res.status(403).json({ message: "Forbidden" });
+
+      // Employees must satisfy photo requirement unless override flag used
+      if (isEmployee(user)) {
+        const need = Math.max(0, Number(task.photoCount ?? (task.photoRequired ? 1 : 0)));
+        const have = Math.max(0, Number(task.photosUploaded ?? 0));
         if (task.photoRequired && have < need && !overridePhotoRequirement) {
           return res.status(400).json({ message: "Photo required before completion" });
         }
@@ -204,12 +303,26 @@ r.post(
           ? { lat: Number(latitude), lng: Number(longitude) }
           : undefined;
 
-      const activeCheckin = (req as any).activeCheckin as { fence?: { lat: number; lng: number; radiusM: number } };
-      const taskFence = activeCheckin?.fence;
-      if (taskFence) {
-        if (!point || !withinFence(point, { lat: taskFence.lat, lng: taskFence.lng }, taskFence.radiusM)) {
-          return res.status(403).json({ message: "Completion must occur on store premises." });
-        }
+      const active = (req as any).activeCheckin as
+        | { fence?: { lat: number; lng: number; radiusM: number } }
+        | undefined;
+      const fence = active?.fence;
+
+      const within = fence
+        ? point && withinFence(point, { lat: fence.lat, lng: fence.lng }, fence.radiusM)
+        : true;
+
+      // 🔎 DEBUG
+      console.log("[COMPLETE geofence]", {
+        taskId: id,
+        userId: user.id,
+        point: point || null,
+        fence: fence || null,
+        withinFence: !!within,
+      });
+
+      if (fence && !within) {
+        return res.status(403).json({ message: "Completion must occur on store premises." });
       }
 
       const updated = await storage.updateTask(id, {
@@ -226,7 +339,8 @@ r.post(
   }
 );
 
-// Serve photo bytes from stored data:URL
+/* ============== Serve photo bytes from stored data:URL ============== */
+
 r.get("/photos/:id", authenticateToken, async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });

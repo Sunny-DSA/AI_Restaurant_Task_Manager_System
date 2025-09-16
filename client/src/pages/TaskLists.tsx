@@ -76,7 +76,7 @@ export default function TaskLists() {
   const canUpdate = hasPermission(user?.role || "", "update", "task_lists");
   const canDelete = hasPermission(user?.role || "", "delete", "task_lists");
 
-  console.log("StoreId",user);
+  
 
   /* ---------- data ---------- */
   const { data: taskLists = [] } = useQuery({

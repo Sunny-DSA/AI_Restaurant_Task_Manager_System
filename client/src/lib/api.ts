@@ -389,9 +389,7 @@ export const analyticsApi = {
   },
 };
 
-/* =========
-   API – Check-ins (geofence)
-   ========= */
+// --- replace the existing in-memory mock in client/src/lib/api.ts ---
 
 export interface CheckInStatus {
   checkedIn: boolean;
@@ -402,31 +400,24 @@ export interface CheckInStatus {
   radiusM?: number | null;
 }
 
-// Simple in-memory mock to track check-in status on client
-let lastCheckin: CheckInStatus = { checkedIn: false };
-
 export const checkinApi = {
   status(): Promise<CheckInStatus> {
-    return Promise.resolve(lastCheckin);
+    return apiRequest<CheckInStatus>("GET", "/api/auth/checkin/status");
   },
 
   checkInToStore(
     storeId: number,
-    coords: { latitude: number; longitude: number },
+    coords: { latitude: number; longitude: number }
   ): Promise<{ success: true }> {
-    lastCheckin = {
-      checkedIn: true,
+    return apiRequest("POST", "/api/auth/checkin", {
       storeId,
       latitude: coords.latitude,
       longitude: coords.longitude,
-      at: new Date().toISOString(),
-    };
-    return Promise.resolve({ success: true });
+    });
   },
 
   checkOut(): Promise<{ success: true }> {
-    lastCheckin = { checkedIn: false };
-    return Promise.resolve({ success: true });
+    return apiRequest("POST", "/api/auth/checkout");
   },
 };
 

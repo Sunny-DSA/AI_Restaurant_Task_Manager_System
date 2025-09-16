@@ -1,10 +1,22 @@
 // client/src/components/CreateTaskDialog.tsx
 import { useEffect, useMemo, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle ,DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { storeApi, userApi } from "@/lib/api";
 import type { User, Store } from "@/lib/api";
@@ -50,6 +62,16 @@ const uid = () =>
     ? crypto.randomUUID()
     : `row-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+// ---- safe JSON reader for fetch responses (works with HTML/error bodies) ----
+async function readJsonSafe(res: Response): Promise<{ json: any; text: string }> {
+  const text = await res.text();
+  try {
+    return { json: text ? JSON.parse(text) : undefined, text };
+  } catch {
+    return { json: undefined, text };
+  }
+}
+
 export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }: Props) {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -73,13 +95,22 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
   const [users, setUsers] = useState<User[]>([]);
 
   const [rows, setRows] = useState<Row[]>([
-    { id: uid(), title: "", description: "", photoRequired: false, photoCount: 1, assigneeId: undefined },
+    {
+      id: uid(),
+      title: "",
+      description: "",
+      photoRequired: false,
+      photoCount: 1,
+      assigneeId: undefined,
+    },
   ]);
 
   const [saving, setSaving] = useState(false);
 
   const userLabel = (u: User) =>
-    [u.firstName, u.lastName].filter(Boolean).join(" ").trim() || u.email || `User #${u.id}`;
+    [u.firstName, u.lastName].filter(Boolean).join(" ").trim() ||
+    u.email ||
+    `User #${u.id}`;
 
   // Load stores on open
   useEffect(() => {
@@ -131,7 +162,15 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
     setDefaultAssign("store_wide");
     setDefaultEmpId("");
     setRecurrence("none");
-    setRows([{ id: uid(), title: "", description: "", photoRequired: false, photoCount: 1 }]);
+    setRows([
+      {
+        id: uid(),
+        title: "",
+        description: "",
+        photoRequired: false,
+        photoCount: 1,
+      },
+    ]);
   }, [open]);
 
   const valid = useMemo(() => {
@@ -144,21 +183,26 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
   const addRow = () =>
     setRows((r) => [
       ...r,
-      { id: uid(), title: "", description: "", photoRequired: false, photoCount: 1, assigneeId: undefined },
+      {
+        id: uid(),
+        title: "",
+        description: "",
+        photoRequired: false,
+        photoCount: 1,
+        assigneeId: undefined,
+      },
     ]);
 
   const removeRow = (id: string) => setRows((r) => r.filter((x) => x.id !== id));
 
-  // ---- Save (import with graceful fallback) ----
-  // ---- Save (fixed: no duplicate creation) ----
+  // ---- Save (import with graceful error handling) ----
   const handleSave = async () => {
-    console.log("handleSave called", { valid, rows, listName, storeId, defaultAssign, defaultEmpId });
-
     try {
       if (!valid) {
         toast({
           title: "Missing info",
-          description: "Give the list a name, add at least one subtask, and pick a store.",
+          description:
+            "Give the list a name, add at least one subtask, and pick a store.",
           variant: "destructive",
         });
         return;
@@ -166,11 +210,15 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
 
       // Map default employee id to a user id (if provided)
       let defaultAssigneeId: number | undefined = undefined;
-      if (defaultAssign === "specific_employee" && defaultEmpId.trim() && users.length > 0) {
+      if (
+        defaultAssign === "specific_employee" &&
+        defaultEmpId.trim() &&
+        users.length > 0
+      ) {
         const byId = users.find(
           (u) =>
             String(u.id) === defaultEmpId.trim() ||
-            String((u as any).employeeId ?? "") === defaultEmpId.trim()
+            String((u as any).employeeId ?? "") === defaultEmpId.trim(),
         );
         if (byId) defaultAssigneeId = byId.id;
       }
@@ -181,11 +229,11 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
           title: r.title.trim(),
           description: r.description?.trim() || undefined,
           photoRequired: !!r.photoRequired,
-          photoCount: r.photoRequired ? Math.max(1, Math.min(10, r.photoCount || 1)) : 0,
+          photoCount: r.photoRequired
+            ? Math.max(1, Math.min(10, r.photoCount || 1))
+            : 0,
           assigneeId: r.assigneeId ?? defaultAssigneeId ?? undefined,
         }));
-
-      console.log("Clean items prepared:", cleanItems);
 
       if (cleanItems.length === 0) {
         toast({
@@ -199,11 +247,10 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
       setSaving(true);
 
       const chosenStoreId =
-        (isAdmin ? storeId : user?.storeId ? Number(user.storeId) : storeId) || undefined;
+        (isAdmin ? storeId : user?.storeId ? Number(user.storeId) : storeId) ||
+        undefined;
 
       // Call /import route
-      console.log("Calling /import route with storeId:", chosenStoreId);
-
       const importRes = await fetch("/api/task-lists/import", {
         method: "POST",
         credentials: "include",
@@ -214,52 +261,64 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
           recurrenceType: recurrence === "none" ? "none" : recurrence,
           sections: [{ title: listName.trim(), items: cleanItems }],
           description: description.trim() || undefined,
+          // You can add storeId here if your server import route expects it:
+          // storeId: chosenStoreId,
         }),
       });
 
-      const importBody = await importRes.json();
-      console.log("Import response status:", importRes.status, "body:", importBody);
+      const { json: importBody, text: importText } = await readJsonSafe(importRes);
 
       if (!importRes.ok) {
-        throw new Error(`IMPORT_HTTP_${importRes.status}: ${JSON.stringify(importBody)}`);
+        const serverMsg =
+          (importBody && (importBody.message || importBody.error)) ||
+          importText ||
+          "Import failed.";
+        throw new Error(`IMPORT_${importRes.status}: ${serverMsg}`);
       }
 
-      const createdLists = (importBody?.lists || []) as Array<{ id: number }>;
+      // Expect { ok: true, created: number, lists: [{ id: number }, ...] }
+      const createdLists: Array<{ id: number }> = Array.isArray(importBody?.lists)
+        ? importBody.lists
+        : [];
 
       // Create templates for each subtask, handle duplicates gracefully
       for (const list of createdLists) {
-        console.log(`Creating templates for listId ${list.id}`);
         for (const item of cleanItems) {
           try {
-            const templateRes = await fetch(`/api/task-lists/${list.id}/templates`, {
-              method: "POST",
-              credentials: "include",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                title: item.title,
-                description: item.description,
-                storeId: chosenStoreId,
-                assigneeType: item.assigneeId ? "specific_employee" : "store_wide",
-                assigneeId: item.assigneeId ?? null,
-                photoRequired: item.photoRequired,
-                photoCount: item.photoCount,
-              }),
-            });
+            const templateRes = await fetch(
+              `/api/task-lists/${list.id}/templates`,
+              {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  title: item.title,
+                  description: item.description,
+                  storeId: chosenStoreId,
+                  assigneeType: item.assigneeId
+                    ? "specific_employee"
+                    : "store_wide",
+                  assigneeId: item.assigneeId ?? null,
+                  photoRequired: item.photoRequired,
+                  photoCount: item.photoCount,
+                }),
+              },
+            );
 
             if (templateRes.status === 201) {
-              const templateCreated = await templateRes.json();
-              console.log("Template created:", templateCreated);
+              // ok
             } else if (templateRes.status === 409) {
-              console.log(`Template "${item.title}" already exists, skipping creation.`);
+              // duplicate title etc. – skip
             } else {
-              const errMsg = await templateRes.text();
-              throw new Error(`Template creation failed: ${errMsg}`);
+              const { text } = await readJsonSafe(templateRes);
+              throw new Error(
+                `Template creation failed (${templateRes.status}): ${text || "Unknown error"}`,
+              );
             }
           } catch (e: any) {
-            console.error(`Error creating template "${item.title}":`, e);
             toast({
               title: "Failed to create template",
-              description: e.message || "Unknown error",
+              description: e?.message || "Unknown error",
               variant: "destructive",
             });
           }
@@ -270,7 +329,7 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
       onCreated?.();
       onClose();
     } catch (err: any) {
-      console.error("Error caught in handleSave:", err);
+      // Surface the precise server error (or fallback)
       toast({
         title: "Failed to create list",
         description: String(err?.message || "Unknown error"),
@@ -278,9 +337,9 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
       });
     } finally {
       setSaving(false);
-      console.log("handleSave finished, saving state reset");
     }
   };
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent
@@ -294,7 +353,8 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
         <DialogHeader>
           <DialogTitle>Create New Task List</DialogTitle>
           <DialogDescription>
-            Fill out the form below to create a new task list for your store or team.
+            Fill out the form below to create a new task list for your store or
+            team.
           </DialogDescription>
         </DialogHeader>
 
@@ -311,7 +371,10 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
             </div>
             <div>
               <Label>Recurrence</Label>
-              <Select value={recurrence} onValueChange={(v) => setRecurrence(v as Recurrence)}>
+              <Select
+                value={recurrence}
+                onValueChange={(v) => setRecurrence(v as Recurrence)}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="One-time" />
                 </SelectTrigger>
@@ -344,7 +407,9 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
                 onValueChange={(v) => setStoreId(v ? Number(v) : undefined)}
               >
                 <SelectTrigger disabled={!isAdmin}>
-                  <SelectValue placeholder={isAdmin ? "Choose a store" : "Your store"} />
+                  <SelectValue
+                    placeholder={isAdmin ? "Choose a store" : "Your store"}
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   {stores.map((s) => (
@@ -356,9 +421,15 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
               </Select>
               {selectedStore && (
                 <div className="mt-2 text-xs text-muted-foreground">
-                  Geofence will be enforced for <span className="font-medium">{selectedStore.name}</span>
+                  Geofence will be enforced for{" "}
+                  <span className="font-medium">{selectedStore.name}</span>
                   {selectedStore.latitude && selectedStore.longitude && (
-                    <> – lat: {selectedStore.latitude}, lng: {selectedStore.longitude}, radius: {selectedStore.geofenceRadius ?? 0}m</>
+                    <>
+                      {" "}
+                      – lat: {selectedStore.latitude}, lng:{" "}
+                      {selectedStore.longitude}, radius:{" "}
+                      {selectedStore.geofenceRadius ?? 0}m
+                    </>
                   )}
                 </div>
               )}
@@ -369,14 +440,18 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
               <Label>Default Assignment</Label>
               <Select
                 value={defaultAssign}
-                onValueChange={(v) => setDefaultAssign(v as "store_wide" | "specific_employee")}
+                onValueChange={(v) =>
+                  setDefaultAssign(v as "store_wide" | "specific_employee")
+                }
               >
                 <SelectTrigger>
                   <SelectValue placeholder="All employees" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="store_wide">All employees</SelectItem>
-                  <SelectItem value="specific_employee">Specific employee</SelectItem>
+                  <SelectItem value="specific_employee">
+                    Specific employee
+                  </SelectItem>
                 </SelectContent>
               </Select>
 
@@ -389,7 +464,8 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
                     placeholder="e.g., 0000"
                   />
                   <div className="text-xs text-muted-foreground mt-1">
-                    Enter the employee’s ID (or user id). You can override this per subtask below.
+                    Enter the employee’s ID (or user id). You can override this
+                    per subtask below.
                   </div>
                 </div>
               )}
@@ -415,7 +491,11 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
                       <Input
                         value={r.title}
                         onChange={(e) =>
-                          setRows((x) => x.map((y) => (y.id === r.id ? { ...y, title: e.target.value } : y)))
+                          setRows((x) =>
+                            x.map((y) =>
+                              y.id === r.id ? { ...y, title: e.target.value } : y,
+                            ),
+                          )
                         }
                         placeholder={`Subtask ${idx + 1}`}
                       />
@@ -429,10 +509,18 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
                           type="checkbox"
                           checked={r.photoRequired}
                           onChange={(e) =>
-                            setRows((x) => x.map((y) => (y.id === r.id ? { ...y, photoRequired: e.target.checked } : y)))
+                            setRows((x) =>
+                              x.map((y) =>
+                                y.id === r.id
+                                  ? { ...y, photoRequired: e.target.checked }
+                                  : y,
+                              ),
+                            )
                           }
                         />
-                        <Label htmlFor={`pr-${r.id}`} className="!m-0">Require photo(s)</Label>
+                        <Label htmlFor={`pr-${r.id}`} className="!m-0">
+                          Require photo(s)
+                        </Label>
                       </div>
                     </div>
 
@@ -452,11 +540,11 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
                                     ...y,
                                     photoCount: Math.max(
                                       r.photoRequired ? 1 : 0,
-                                      Math.min(10, Number(e.target.value) || 0)
+                                      Math.min(10, Number(e.target.value) || 0),
                                     ),
                                   }
-                                : y
-                            )
+                                : y,
+                            ),
                           )
                         }
                         disabled={!r.photoRequired}
@@ -466,14 +554,20 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
                     <div>
                       <Label>Assignee (optional)</Label>
                       <Select
-                        value={r.assigneeId != null ? String(r.assigneeId) : "__default"}
+                        value={
+                          r.assigneeId != null ? String(r.assigneeId) : "__default"
+                        }
                         onValueChange={(v) =>
                           setRows((x) =>
                             x.map((y) =>
                               y.id === r.id
-                                ? { ...y, assigneeId: v === "__default" ? undefined : Number(v) }
-                                : y
-                            )
+                                ? {
+                                    ...y,
+                                    assigneeId:
+                                      v === "__default" ? undefined : Number(v),
+                                  }
+                                : y,
+                            ),
                           )
                         }
                       >
@@ -497,7 +591,13 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
                     <Input
                       value={r.description || ""}
                       onChange={(e) =>
-                        setRows((x) => x.map((y) => (y.id === r.id ? { ...y, description: e.target.value } : y)))
+                        setRows((x) =>
+                          x.map((y) =>
+                            y.id === r.id
+                              ? { ...y, description: e.target.value }
+                              : y,
+                          ),
+                        )
                       }
                       placeholder="Notes or instructions"
                     />
@@ -505,7 +605,11 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
 
                   {rows.length > 1 && (
                     <div className="flex justify-end mt-2">
-                      <Button type="button" variant="ghost" onClick={() => removeRow(r.id)}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => removeRow(r.id)}
+                      >
                         <Trash2 className="w-4 h-4 mr-2" />
                         Remove
                       </Button>
@@ -518,7 +622,9 @@ export default function CreateTaskDialog({ open, onClose, onCreated, onCreate }:
 
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-3">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
             <Button onClick={handleSave} disabled={saving || !valid}>
               {saving ? "Creating..." : "Create List"}
             </Button>
