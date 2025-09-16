@@ -6,7 +6,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import TaskListRunPage from "@/pages/TaskListRunPage";
-import TaskListsPage from "@/pages/TaskListsPage";//NEW
+import TaskListsPage from "@/pages/TaskListsPage"; // NEW
 import Layout from "@/components/Layout";
 import Dashboard from "@/pages/Dashboard";
 import Tasks from "@/pages/Tasks";
@@ -17,21 +17,18 @@ import Reports from "@/pages/Reports";
 import Login from "@/pages/Login";
 import Logout from "@/pages/Logout";
 import NotFound from "@/pages/not-found";
+import PhotoFeed from "@/pages/PhotoFeed";
 
 /** Protected shell: if not authenticated -> redirect to /login */
 function ProtectedRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
   const [, setLocation] = useLocation();
 
-  // If not logged in, go to /login
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      setLocation("/login", { replace: true });
-    }
+    if (!isLoading && !isAuthenticated) setLocation("/login", { replace: true });
   }, [isAuthenticated, isLoading, setLocation]);
 
-  // While the auth state loads
-  if (isLoading) {
+  if (isLoading || !isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary" />
@@ -39,17 +36,7 @@ function ProtectedRoutes() {
     );
   }
 
-  // If not authenticated, show loading (redirect will happen via useEffect)
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary" />
-      </div>
-    );
-  }
-
-  // Authenticated area
- return (
+  return (
     <Layout>
       <Switch>
         <Route path="/" component={Dashboard} />
@@ -57,11 +44,13 @@ function ProtectedRoutes() {
         <Route path="/task" component={Tasks} />
         <Route path="/task-lists" component={TaskLists} />
         <Route path="/tasklists" component={TaskListsPage} />
-        {/* NEW: run page */}
         <Route path="/tasklists/run/:id" component={TaskListRunPage} />
         <Route path="/stores" component={Stores} />
         <Route path="/users" component={Users} />
         <Route path="/reports" component={Reports} />
+        {/* NEW: admin photo feed */}
+        <Route path="/admin/photos" component={PhotoFeed} />
+        {/* Fallback must be LAST */}
         <Route component={NotFound} />
       </Switch>
     </Layout>
@@ -74,14 +63,13 @@ function Router() {
       {/* Public routes */}
       <Route path="/login" component={Login} />
       <Route path="/logout" component={Logout} />
-
-      {/* Everything else is protected */}
+      {/* Everything else protected */}
       <Route component={ProtectedRoutes} />
     </Switch>
   );
 }
 
-function App() {
+export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -91,5 +79,3 @@ function App() {
     </QueryClientProvider>
   );
 }
-
-export default App;
