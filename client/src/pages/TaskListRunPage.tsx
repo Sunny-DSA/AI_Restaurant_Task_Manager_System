@@ -1,10 +1,16 @@
+// client/src/pages/TasklistsRunpage.tsx
 import { useMemo, useRef, useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Camera, Check, Lock } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  Camera,
+  Check,
+  Lock,
+  Search as SearchIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { useToast } from "@/hooks/use-toast";
 import {
   Select,
   SelectContent,
@@ -12,9 +18,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { checkinApi } from "@/lib/api";
 
+/* =========================
+   Types
+========================= */
 type TemplateItem = {
   id: number;
   title: string;
@@ -22,6 +33,16 @@ type TemplateItem = {
   photoRequired?: boolean;
   photoCount?: number | null;
 };
+type TemplateSection = { title: string; items: TemplateItem[] };
+
+type TodayTask = {
+  id: number;
+  templateId: number;
+  status: string;
+  photoCount?: number | null;
+  photosUploaded?: number | null;
+};
+
 type CheckInStatus = {
   checkedIn: boolean;
   storeId?: number;
@@ -30,51 +51,93 @@ type CheckInStatus = {
   at?: string;
 };
 
-type TemplateSection = { title: string; items: TemplateItem[] };
+type Runtime = {
+  [templateId: number]: {
+    taskId?: number;
+    required: number;
+    photos: number;
+    checked: boolean;
+  };
+};
 
+/* =========================
+   Component
+========================= */
 export default function TaskListRunPage() {
+  // Route: keep /tasklists/run/:id
   const [, params] = useRoute<{ id: string }>("/tasklists/run/:id");
   const listId = params ? Number(params.id) : 0;
   const [, setLocation] = useLocation();
+
   const { user } = useAuth();
   const { toast } = useToast();
+  const qc = useQueryClient();
 
   const isAdmin = user?.role === "master_admin" || user?.role === "admin";
   const isManager = user?.role === "store_manager";
   const isEmployee = user?.role === "employee";
   const mustCheckIn = isEmployee || isManager;
 
+  // Admin must choose; others default to their store
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(
     isAdmin ? null : (user?.storeId ?? null),
   );
 
-  // ---- list meta
+  // Filters
+  const [showMode, setShowMode] = useState<
+    "all" | "needs" | "incomplete" | "completed"
+  >("all");
+  const [q, setQ] = useState("");
+
+  // Preview modal (also used as lightbox for session thumbs)
+  const [preview, setPreview] = useState<{
+    templateId: number;
+    url: string;
+    // upload if file exists and readOnly !== true
+    file?: File;
+    readOnly?: boolean;
+  } | null>(null);
+
+  // Session thumbnails (per taskId)
+  const [sessionPhotos, setSessionPhotos] = useState<Record<number, string[]>>(
+    {},
+  );
+
+  // Ensure today's run got "primed"
+  const [runPrimed, setRunPrimed] = useState(false);
+
+  /* -------- list meta -------- */
   const { data: list } = useQuery<{ id: number; name: string }>({
     queryKey: ["/api/task-lists", listId],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
-      const r = await fetch(`/api/task-lists/${listId}`, { credentials: "include" });
+      const r = await fetch(`/api/task-lists/${listId}`, {
+        credentials: "include",
+      });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ id: number; name: string }>;
+      return r.json();
     },
   });
 
-  // ---- templates
-  const { data: templates = [] } = useQuery<TemplateItem[]>({
+  /* -------- templates -------- */
+  const {
+    data: templates = [],
+    isLoading: templatesLoading,
+    isFetching: templatesFetching,
+  } = useQuery<TemplateItem[]>({
     queryKey: ["/api/task-lists", listId, "templates"],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
-      const r = await fetch(`/api/task-lists/${listId}/templates`, { credentials: "include" });
+      const r = await fetch(`/api/task-lists/${listId}/templates`, {
+        credentials: "include",
+      });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<TemplateItem[]>;
+      return r.json();
     },
   });
 
-  const [state, setState] = useState<Runtime>({});
-  const [runPrimed, setRunPrimed] = useState(false);
-
-  useEffect(() => {
-    if (!templates || templates.length === 0) return;
+  /* -------- initial runtime by templates -------- */
+  const initialRuntime: Runtime = useMemo(() => {
     const next: Runtime = {};
     for (const t of templates) {
       next[t.id] = {
@@ -84,10 +147,16 @@ export default function TaskListRunPage() {
         checked: false,
       };
     }
-    setState(next);
+    return next;
   }, [templates]);
 
-  // ---- admins: store list
+  const [state, setState] = useState<Runtime>({});
+
+  useEffect(() => {
+    setState(initialRuntime);
+  }, [initialRuntime]);
+
+  /* -------- stores (admins only) -------- */
   const { data: stores = [] } = useQuery<any[]>({
     queryKey: ["/api/stores"],
     enabled: isAdmin,
@@ -98,90 +167,40 @@ export default function TaskListRunPage() {
     },
   });
 
-  // ---- check-in status
+  /* -------- check-in status -------- */
   const { data: checkin, refetch: refetchCheckin } = useQuery<CheckInStatus>({
     queryKey: ["/api/checkins/me"],
     queryFn: () => checkinApi.status(),
     staleTime: 10_000,
   });
 
-  const handleCompleteRun = async () => {
-    const incompleteTasks = Object.values(state).filter(
-      (t) => !t.checked || (t.required > 0 && t.photos < t.required),
-    );
-    if (incompleteTasks.length > 0) {
-      toast({
-        title: "Incomplete tasks",
-        description: "You need to complete all tasks and upload required photos.",
-        variant: "destructive",
-      });
-      return;
-    }
-    const ok = await ensureCheckedIn();
-    if (!ok) return;
-    for (const task of Object.values(state)) {
-      if (task.taskId) completeTask.mutate(task.taskId);
-    }
-    toast({ title: "All tasks completed!" });
-  };
-
-  const doCheckIn = useMutation({
-    mutationFn: async (coords: { latitude: number; longitude: number }) => {
-      if (!selectedStoreId) throw new Error("Store ID not selected");
-      return checkinApi.checkInToStore(selectedStoreId, coords);
-    },
-    onSuccess: () => {
-      toast({ title: "Checked in" });
-      refetchCheckin();
-    },
-    onError: (e: any) => {
-      toast({
-        title: "Check-in failed",
-        description: String(e?.message || e),
-        variant: "destructive",
-      });
-    },
-  });
-
-  const doCheckOut = useMutation({
-    mutationFn: () => checkinApi.checkOut(),
-    onSuccess: () => {
-      toast({ title: "Checked out" });
-      refetchCheckin();
-    },
-  });
-
-  // ---- one flat section
-  const sections: TemplateSection[] = useMemo(
-    () => [{ title: "TASKS", items: templates }],
-    [templates],
-  );
-
-  // ---- runtime per template
-  type Runtime = {
-    [templateId: number]: {
-      taskId?: number;
-      required: number;
-      photos: number;
-      checked: boolean;
-    };
-  };
-
-  // ---- Ensure today's tasks exist
-  const { data: todayTasks = [] } = useQuery<any[]>({
+  /* -------- today’s tasks (provisioned by backend) -------- */
+  const {
+    data: todayTasks = [],
+    isLoading: todayLoading,
+    isFetching: todayFetching,
+  } = useQuery<TodayTask[]>({
     queryKey: ["/api/task-lists", listId, "today", selectedStoreId],
     enabled: Number.isFinite(listId) && !!(selectedStoreId ?? user?.storeId),
     queryFn: async () => {
       const sid = selectedStoreId ?? user?.storeId;
-      const r = await fetch(`/api/task-lists/${listId}/tasks?storeId=${sid}`, { credentials: "include" });
+      const r = await fetch(
+        `/api/task-lists/${listId}/tasks?storeId=${sid}`,
+        { credentials: "include" },
+      );
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<any[]>;
+      return r.json();
     },
   });
 
+  // Fold server tasks into runtime
   useEffect(() => {
-    const next: Runtime = {};
-    for (const t of todayTasks || []) {
+    if (!todayTasks || todayTasks.length === 0) {
+      setRunPrimed(false);
+      return;
+    }
+    const next: Runtime = { ...initialRuntime };
+    for (const t of todayTasks) {
       const tid = Number(t.templateId);
       if (!tid) continue;
       next[tid] = {
@@ -192,8 +211,14 @@ export default function TaskListRunPage() {
       };
     }
     setState(next);
-    setRunPrimed(todayTasks.length > 0);
-  }, [todayTasks]);
+    setRunPrimed(true);
+  }, [todayTasks, initialRuntime]);
+
+  /* -------- small helpers -------- */
+  const sections: TemplateSection[] = useMemo(
+    () => [{ title: "TASKS", items: templates }],
+    [templates],
+  );
 
   const totals = useMemo(() => {
     const ids = Object.keys(state);
@@ -236,29 +261,99 @@ export default function TaskListRunPage() {
     }
     toast({
       title: "Check-in required",
-      description: "You must be on store premises to upload photos or complete tasks.",
+      description:
+        "You must be on store premises to upload photos or complete tasks.",
       variant: "destructive",
     });
     return false;
   };
 
-  // ---- upload photo (gated by check-in) + client-side cap
+  /* -------- mutations -------- */
+  const doCheckIn = useMutation({
+    mutationFn: async (coords: { latitude: number; longitude: number }) => {
+      if (!selectedStoreId) throw new Error("Store ID not selected");
+      return checkinApi.checkInToStore(selectedStoreId, coords);
+    },
+    onSuccess: () => {
+      toast({ title: "Checked in" });
+      refetchCheckin();
+    },
+    onError: (e: any) =>
+      toast({
+        title: "Check-in failed",
+        description: String(e?.message || e),
+        variant: "destructive",
+      }),
+  });
+
+  const doCheckOut = useMutation({
+    mutationFn: () => checkinApi.checkOut(),
+    onSuccess: () => {
+      toast({ title: "Checked out" });
+      refetchCheckin();
+    },
+  });
+
+  // Create today's task if needed
+  const ensureTask = useMutation({
+    mutationFn: async (vars: { templateId: number }) => {
+      const sid = selectedStoreId ?? user?.storeId;
+      const r = await fetch(
+        `/api/task-lists/${listId}/ensure-task${
+          sid ? `?storeId=${sid}` : ""
+        }`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ templateId: vars.templateId }),
+        },
+      );
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<TodayTask>;
+    },
+    onSuccess: (task, { templateId }) => {
+      setState((s) => ({
+        ...s,
+        [templateId]: {
+          ...(s[templateId] || {
+            required: Number(task.photoCount ?? 0),
+            photos: 0,
+            checked: false,
+          }),
+          taskId: Number(task.id),
+          required: Number(task.photoCount ?? s[templateId]?.required ?? 0),
+          photos: Number(task.photosUploaded ?? s[templateId]?.photos ?? 0),
+        },
+      }));
+      setRunPrimed(true);
+    },
+    onError: (e: any) =>
+      toast({
+        title: "Could not start task",
+        description: String(e?.message || e),
+        variant: "destructive",
+      }),
+  });
+
+  // Upload photo (sequentially when multiple)
   const uploadPhoto = useMutation({
     mutationFn: async (vars: { taskId: number; file: File }) => {
-      // client-side guard: find the runtime row and block if full
+      // guard: cap locally before sending
       const entry = Object.values(state).find((v) => v.taskId === vars.taskId);
       if (entry && entry.required > 0 && entry.photos >= entry.required) {
         throw new Error(`Upload limit reached (${entry.required}).`);
       }
-
       const ok = await ensureCheckedIn();
       if (!ok) throw new Error("Not checked in");
 
       const coords = await getCoords();
       const fd = new FormData();
       fd.append("photo", vars.file);
-      if (coords.latitude != null) fd.append("latitude", String(coords.latitude));
-      if (coords.longitude != null) fd.append("longitude", String(coords.longitude));
+      if (coords.latitude != null)
+        fd.append("latitude", String(coords.latitude));
+      if (coords.longitude != null)
+        fd.append("longitude", String(coords.longitude));
 
       const r = await fetch(`/api/tasks/${vars.taskId}/photos`, {
         method: "POST",
@@ -268,13 +363,13 @@ export default function TaskListRunPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ photosUploaded?: number; required?: number }>;
     },
-    onSuccess: (out, { taskId }) => {
+    // include the file in variables so we can build a session URL
+    onSuccess: (out, { taskId, file }) => {
       setState((s) => {
         const n: Runtime = { ...s };
         for (const key of Object.keys(n)) {
           const t = n[Number(key)];
           if (t.taskId === taskId) {
-            // Prefer server counters; otherwise clamp locally
             const req = Number(out?.required ?? t.required ?? 0);
             const have = Number(out?.photosUploaded ?? (t.photos ?? 0) + 1);
             t.required = req;
@@ -283,6 +378,13 @@ export default function TaskListRunPage() {
         }
         return n;
       });
+
+      // Session gallery: keep a local preview
+      const url = URL.createObjectURL(file);
+      setSessionPhotos((g) => ({
+        ...g,
+        [taskId]: [...(g[taskId] || []), url],
+      }));
       setRunPrimed(true);
     },
     onError: (e: any) => {
@@ -343,85 +445,32 @@ export default function TaskListRunPage() {
     },
   });
 
-  const ensureTask = useMutation({
-    mutationFn: async (vars: { templateId: number }) => {
-      const sid = selectedStoreId ?? user?.storeId;
-      const r = await fetch(
-        `/api/task-lists/${listId}/ensure-task${sid ? `?storeId=${sid}` : ""}`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ templateId: vars.templateId }),
-        },
-      );
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<any>;
-    },
-    onSuccess: (task, { templateId }) => {
-      setState((s) => ({
-        ...s,
-        [templateId]: {
-          ...(s[templateId] || {
-            required: Number(task.photoCount ?? 0),
-            photos: 0,
-            checked: false,
-          }),
-          taskId: Number(task.id),
-          required: Number(task.photoCount ?? s[templateId]?.required ?? 0),
-          photos: Number(task.photosUploaded ?? s[templateId]?.photos ?? 0),
-        },
-      }));
-      setRunPrimed(true);
-    },
-    onError: (e: any) =>
+  /* -------- handlers -------- */
+  const handleCompleteRun = async () => {
+    const incomplete = Object.values(state).filter(
+      (t) => !t.checked || (t.required > 0 && t.photos < t.required),
+    );
+    if (incomplete.length > 0) {
       toast({
-        title: "Could not start task",
-        description: String(e?.message || e),
+        title: "Incomplete tasks",
+        description:
+          "You need to complete all tasks and upload required photos.",
         variant: "destructive",
-      }),
-  });
-
-  // ---- preview + retake
-  const [preview, setPreview] = useState<{
-    templateId: number;
-    file: File;
-    url: string;
-  } | null>(null);
-
-  const confirmUploadFromPreview = async () => {
-    if (!preview) return;
-    try {
-      const ok = await ensureCheckedIn();
-      if (!ok) return;
-
-      const t = state[preview.templateId];
-      // Guard again before sending
-      if (t && t.required > 0 && t.photos >= t.required) {
-        toast({
-          title: "Upload limit reached",
-          description: `This task already has ${t.photos}/${t.required} photos.`,
-          variant: "destructive",
-        });
-        return;
-      }
-
-      const ensured = t?.taskId
-        ? { id: t.taskId }
-        : await ensureTask.mutateAsync({ templateId: preview.templateId });
-
-      uploadPhoto.mutate({ taskId: Number(ensured.id), file: preview.file });
-    } finally {
-      URL.revokeObjectURL(preview?.url || "");
-      setPreview(null);
+      });
+      return;
     }
+    const ok = await ensureCheckedIn();
+    if (!ok) return;
+
+    for (const task of Object.values(state)) {
+      if (task.taskId && !task.checked) completeTask.mutate(task.taskId);
+    }
+    toast({ title: "All tasks completed!" });
   };
 
-  // ---- input refs
   const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
   const openFile = (templateId: number) => fileInputs.current[templateId]?.click();
 
-  // ---- checkbox handler (ensures task when needed)
   const toggleCheck = async (templateId: number) => {
     const t = state[templateId];
     if (!t?.taskId) {
@@ -451,17 +500,92 @@ export default function TaskListRunPage() {
     if (!cur.checked) completeTask.mutate(cur.taskId!);
   };
 
+  const confirmUploadFromPreview = async () => {
+    if (!preview) return;
+    try {
+      if (preview.readOnly || !preview.file) {
+        // Just close for read-only lightbox
+        URL.revokeObjectURL(preview.url);
+        setPreview(null);
+        return;
+      }
+
+      const ok = await ensureCheckedIn();
+      if (!ok) return;
+
+      const rt = state[preview.templateId];
+      if (rt && rt.required > 0 && rt.photos >= rt.required) {
+        toast({
+          title: "Upload limit reached",
+          description: `This task already has ${rt.photos}/${rt.required} photos.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const ensured = rt?.taskId
+        ? { id: rt.taskId }
+        : await ensureTask.mutateAsync({ templateId: preview.templateId });
+
+      await uploadPhoto.mutateAsync({
+        taskId: Number(ensured.id),
+        file: preview.file,
+      });
+    } finally {
+      try {
+        URL.revokeObjectURL(preview.url);
+      } catch {}
+      setPreview(null);
+    }
+  };
+
+  /* -------- filters -------- */
+  function filterItems(items: TemplateItem[]) {
+    return items.filter((it) => {
+      const r = state[it.id] || { required: 0, photos: 0, checked: false };
+      const needs = (it.photoRequired ?? false) || (r.required ?? 0) > 0;
+      const incomplete = !r.checked;
+      const matchesQ = q.trim()
+        ? `${it.title} ${it.description ?? ""}`
+            .toLowerCase()
+            .includes(q.trim().toLowerCase())
+        : true;
+
+      if (!matchesQ) return false;
+      if (showMode === "needs") return needs;
+      if (showMode === "incomplete") return incomplete;
+      if (showMode === "completed") return r.checked;
+      return true;
+    });
+  }
+
+  /* -------- UI helpers -------- */
+  const safeBack = () => {
+    if (window.history.length > 1) window.history.back();
+    else setLocation("/task-lists");
+  };
+
+  const loading = templatesLoading || todayLoading || templatesFetching || todayFetching;
+
+  /* =========================
+     Render
+  ========================= */
   return (
     <div className="p-4 md:p-6">
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={() => setLocation("/task-lists")}>
+          <Button variant="outline" onClick={safeBack}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
           <div>
-            <h2 className="text-xl font-semibold">{list?.name ?? "Task List"}</h2>
-            <p className="text-sm text-muted-foreground">Upload photos and complete items</p>
+            <h2 className="text-xl font-semibold">
+              {list?.name ?? "Task List"}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Upload photos and complete items
+            </p>
           </div>
         </div>
 
@@ -484,25 +608,25 @@ export default function TaskListRunPage() {
             </Select>
           )}
 
-          {(isAdmin || isManager) && (
-            <Button variant="outline" disabled title="Runs are automatic now; employees can start working immediately.">
-              Run not required
-            </Button>
-          )}
-
-          <Button disabled={!canComplete} variant={canComplete ? "default" : "outline"} onClick={handleCompleteRun}>
+          <Button
+            disabled={!canComplete}
+            variant={canComplete ? "default" : "outline"}
+            onClick={handleCompleteRun}
+          >
             <Check className="w-4 h-4 mr-2" />
             Complete Run
           </Button>
         </div>
       </div>
 
-      {/* check-in banner (employees/managers) */}
+      {/* Check-in banner */}
       {mustCheckIn && (
         <Card className="p-3 mb-4">
           <div className="flex items-center justify-between">
             <div className="text-sm">
-              <div className="font-medium">{checkin?.checkedIn ? "Checked in" : "Check in required"}</div>
+              <div className="font-medium">
+                {checkin?.checkedIn ? "Checked in" : "Check in required"}
+              </div>
               <div className="text-muted-foreground">
                 {checkin?.checkedIn
                   ? "You can upload photos and complete tasks."
@@ -511,7 +635,12 @@ export default function TaskListRunPage() {
             </div>
             <div className="flex items-center gap-2">
               {checkin?.checkedIn ? (
-                <Button variant="outline" size="sm" onClick={() => doCheckOut.mutate()} disabled={doCheckOut.isPending}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => doCheckOut.mutate()}
+                  disabled={doCheckOut.isPending}
+                >
                   Check out
                 </Button>
               ) : (
@@ -520,11 +649,15 @@ export default function TaskListRunPage() {
                   onClick={async () => {
                     const coords = await getCoords();
                     if (coords.latitude != null && coords.longitude != null) {
-                      doCheckIn.mutate({ latitude: coords.latitude, longitude: coords.longitude });
+                      doCheckIn.mutate({
+                        latitude: coords.latitude,
+                        longitude: coords.longitude,
+                      });
                     } else {
                       toast({
                         title: "Location required",
-                        description: "Enable location and try again near the store.",
+                        description:
+                          "Enable location and try again near the store.",
                         variant: "destructive",
                       });
                     }
@@ -539,143 +672,348 @@ export default function TaskListRunPage() {
         </Card>
       )}
 
-      {/* progress */}
+      {/* Filters */}
+      <div className="mb-4 flex flex-wrap gap-2 items-end">
+        <div className="flex gap-1">
+          {[
+            { k: "all", label: "All" },
+            { k: "needs", label: "Needs Photo" },
+            { k: "incomplete", label: "Incomplete" },
+            { k: "completed", label: "Completed" },
+          ].map((b) => (
+            <Button
+              key={b.k}
+              size="sm"
+              variant={showMode === (b.k as any) ? "default" : "outline"}
+              onClick={() => setShowMode(b.k as any)}
+              className="h-8"
+            >
+              {b.label}
+            </Button>
+          ))}
+        </div>
+
+        <div className="ml-auto w-full sm:w-[300px]">
+          <div className="relative">
+            <SearchIcon className="w-4 h-4 absolute left-2 top-2.5 text-muted-foreground" />
+            <Input
+              className="pl-8"
+              placeholder="Search subtasks…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Progress bar */}
       <div className="mb-6">
         <div className="flex justify-between text-xs text-muted-foreground mb-1">
-          <span>Progress {totals.done}/{totals.total}</span>
+          <span>
+            Progress {totals.done}/{totals.total}
+          </span>
         </div>
         <div className="h-2 bg-muted rounded-full overflow-hidden">
           <div
             className="h-full bg-emerald-600"
-            style={{ width: `${(totals.done / Math.max(1, totals.total)) * 100}%` }}
+            style={{
+              width: `${(totals.done / Math.max(1, totals.total)) * 100}%`,
+            }}
           />
         </div>
       </div>
 
-      {/* sections */}
+      {/* Loading skeleton */}
+      {loading && (
+        <Card className="p-3 mb-4">
+          <div className="animate-pulse space-y-3">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-12 bg-muted rounded" />
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Sections */}
       <div className="space-y-4">
-        {sections.map((sec) => (
-          <Card key={sec.title} className="p-3">
-            <div className="text-sm font-medium mb-2">{sec.title}</div>
+        {sections.map((sec) => {
+          const items = filterItems(sec.items);
+          return (
+            <Card key={sec.title} className="p-3">
+              <div className="text-sm font-medium mb-2">{sec.title}</div>
 
-            <div className="space-y-2">
-              {sec.items.map((it) => {
-                const r = state[it.id] || { required: 0, photos: 0, checked: false };
-                const needs = (it.photoRequired ?? false) || (r.required ?? 0) > 0;
-                const disabled = needs && r.photos < (r.required ?? 0); // checkbox lock
-                const left = Math.max(0, (r.required ?? 0) - (r.photos ?? 0));
-                const isFull = (r.required ?? 0) > 0 && (r.photos ?? 0) >= (r.required ?? 0); // NEW
+              {items.length === 0 && !loading && (
+                <div className="text-sm text-muted-foreground">
+                  Nothing to show with current filters.
+                </div>
+              )}
 
-                return (
-                  <div key={it.id} className="flex items-start justify-between gap-3 rounded-md border p-3">
-                    <label
-                      className={`flex items-start gap-3 select-none ${disabled ? "opacity-70" : ""}`}
-                      title={disabled ? `Upload ${left} more photo${left === 1 ? "" : "s"} to enable` : "Mark complete"}
+              <div className="space-y-2">
+                {items.map((it) => {
+                  const r = state[it.id] || {
+                    required: 0,
+                    photos: 0,
+                    checked: false,
+                  };
+                  const needs =
+                    (it.photoRequired ?? false) || (r.required ?? 0) > 0;
+                  const disabled = needs && r.photos < (r.required ?? 0);
+                  const left = Math.max(
+                    0,
+                    (r.required ?? 0) - (r.photos ?? 0),
+                  );
+                  const isFull =
+                    (r.required ?? 0) > 0 &&
+                    (r.photos ?? 0) >= (r.required ?? 0);
+
+                  const taskId = r.taskId;
+                  const thumbs = taskId ? sessionPhotos[taskId] || [] : [];
+
+                  return (
+                    <div
+                      key={it.id}
+                      className="flex items-start justify-between gap-3 rounded-md border p-3"
                     >
-                      <input
-                        type="checkbox"
-                        className="mt-1 h-4 w-4"
-                        checked={r.checked}
-                        disabled={disabled || completeTask.isPending}
-                        onChange={() => toggleCheck(it.id)}
-                      />
-                      <div>
-                        <div className="text-sm flex items-center gap-1">
-                          {it.title}
-                          {disabled && <Lock className="w-3.5 h-3.5 text-amber-500" />}
-                        </div>
-                        {needs && (
-                          <div className="text-xs text-muted-foreground mt-0.5">
-                            Photos required: {r.photos}/{r.required}
-                          </div>
-                        )}
-                        {it.description && (
-                          <div className="text-xs text-muted-foreground mt-0.5">{it.description}</div>
-                        )}
-                      </div>
-                    </label>
-
-                    <div className="flex items-center gap-2">
-                      <input
-                        ref={(el) => (fileInputs.current[it.id] = el)}
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0] ?? null;
-                          if (!file) return;
-
-                          // Guard selection when full
-                          if (isFull) {
-                            toast({
-                              title: "Upload limit reached",
-                              description: `This task already has ${r.photos}/${r.required} photos.`,
-                              variant: "destructive",
-                            });
-                            e.currentTarget.value = "";
-                            return;
-                          }
-
-                          const url = URL.createObjectURL(file);
-                          setPreview({ templateId: it.id, file, url });
-                          e.currentTarget.value = "";
-                        }}
-                      />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          if (isFull) {
-                            toast({
-                              title: "Upload limit reached",
-                              description: `This task already has ${r.photos}/${r.required} photos.`,
-                              variant: "destructive",
-                            });
-                            return;
-                          }
-                          fileInputs.current[it.id]?.click();
-                        }}
-                        disabled={uploadPhoto.isPending || isFull}
+                      <label
+                        className={`flex items-start gap-3 select-none ${
+                          disabled ? "opacity-70" : ""
+                        }`}
                         title={
-                          isFull
-                            ? "Upload limit reached"
-                            : left > 0
-                            ? `Add photo (${left} left)`
-                            : "Add photo"
+                          disabled
+                            ? `Upload ${left} more photo${
+                                left === 1 ? "" : "s"
+                              } to unlock`
+                            : "Mark complete"
                         }
                       >
-                        <Camera className="w-4 h-4 mr-2" />
-                        Add Photo
-                      </Button>
+                        <input
+                          type="checkbox"
+                          className="mt-1 h-4 w-4"
+                          checked={r.checked}
+                          disabled={disabled || completeTask.isPending}
+                          onChange={() => toggleCheck(it.id)}
+                        />
+                        <div>
+                          <div className="text-sm flex items-center gap-1">
+                            {it.title}
+                            {disabled && (
+                              <Lock className="w-3.5 h-3.5 text-amber-500" />
+                            )}
+                          </div>
+
+                          {/* Helper line */}
+                          {needs && (
+                            <div className="text-xs mt-0.5">
+                              <span
+                                className={
+                                  left > 0
+                                    ? "text-amber-600"
+                                    : "text-muted-foreground"
+                                }
+                              >
+                                {left > 0
+                                  ? `Upload ${left} more photo${
+                                      left === 1 ? "" : "s"
+                                    } to unlock`
+                                  : `Photos required: ${r.photos}/${r.required}`}
+                              </span>
+                            </div>
+                          )}
+
+                          {it.description && (
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              {it.description}
+                            </div>
+                          )}
+
+                          {/* Session thumbnails */}
+                          {thumbs.length > 0 && (
+                            <div className="mt-2 flex gap-2 flex-wrap">
+                              {thumbs.map((u, idx) => (
+                                <button
+                                  key={idx}
+                                  onClick={() =>
+                                    setPreview({
+                                      templateId: it.id,
+                                      url: u,
+                                      readOnly: true,
+                                    })
+                                  }
+                                  className="w-12 h-12 rounded overflow-hidden border"
+                                  title="View photo"
+                                >
+                                  <img
+                                    src={u}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </label>
+
+                      {/* Photo inputs & button */}
+                      <div className="flex items-center gap-2">
+                        <input
+                          ref={(el) => (fileInputs.current[it.id] = el)}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          multiple
+                          className="hidden"
+                          onChange={async (e) => {
+                            const files = Array.from(e.target.files || []);
+                            if (files.length === 0) return;
+
+                            // Ensure task exists before first upload
+                            let rt = state[it.id];
+                            if (!rt?.taskId) {
+                              try {
+                                const created = await ensureTask.mutateAsync({
+                                  templateId: it.id,
+                                });
+                                setState((s) => ({
+                                  ...s,
+                                  [it.id]: {
+                                    ...(s[it.id] || {
+                                      required: created.photoCount ?? 0,
+                                      photos: 0,
+                                      checked: false,
+                                    }),
+                                    taskId: created.id,
+                                  },
+                                }));
+                                rt = { ...(state[it.id] || {}), taskId: created.id } as any;
+                              } catch {
+                                e.currentTarget.value = "";
+                                return;
+                              }
+                            }
+
+                            // Upload sequentially, respecting remaining cap
+                            for (const f of files) {
+                              const cur = state[it.id] || { required: 0, photos: 0 };
+                              const remaining = Math.max(
+                                0,
+                                (cur.required ?? 0) - (cur.photos ?? 0),
+                              );
+                              if ((cur.required ?? 0) > 0 && remaining <= 0) break;
+                              await uploadPhoto.mutateAsync({
+                                taskId: Number(rt!.taskId),
+                                file: f,
+                              });
+                            }
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (isFull) {
+                              toast({
+                                title: "Upload limit reached",
+                                description: `This task already has ${r.photos}/${r.required} photos.`,
+                                variant: "destructive",
+                              });
+                              return;
+                            }
+                            if (isAdmin && !selectedStoreId) {
+                              toast({
+                                title: "Choose a store",
+                                description:
+                                  "Pick a store before uploading photos.",
+                              });
+                              return;
+                            }
+                            openFile(it.id);
+                          }}
+                          disabled={
+                            uploadPhoto.isPending ||
+                            ensureTask.isPending ||
+                            (isAdmin && !selectedStoreId) ||
+                            isFull
+                          }
+                          title={
+                            isFull
+                              ? "Upload limit reached"
+                              : "Add photo(s)"
+                          }
+                        >
+                          <Camera className="w-4 h-4 mr-2" />
+                          Add Photo
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        ))}
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })}
       </div>
 
-      {/* Photo preview modal */}
+      {/* Sticky footer */}
+      <div className="fixed bottom-3 left-0 right-0 px-3 pointer-events-none">
+        <div className="mx-auto max-w-5xl bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border rounded-xl p-3 shadow pointer-events-auto">
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <div className="text-xs text-muted-foreground mb-1">
+                Progress {totals.done}/{totals.total}
+              </div>
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className={`h-full ${
+                    canComplete ? "bg-emerald-600" : "bg-primary"
+                  }`}
+                  style={{
+                    width: `${(totals.done / Math.max(1, totals.total)) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+            <Button
+              size="sm"
+              className="whitespace-nowrap"
+              disabled={!canComplete}
+              onClick={handleCompleteRun}
+            >
+              <Check className="w-4 h-4 mr-2" />
+              Complete Run
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Photo preview / lightbox */}
       {preview && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
           <div className="bg-white rounded-lg shadow max-w-md w-full p-4">
-            <div className="font-medium mb-2">Preview</div>
+            <div className="font-medium mb-2">
+              {preview.readOnly ? "Photo" : "Preview"}
+            </div>
             <img src={preview.url} alt="preview" className="w-full rounded border" />
             <div className="flex justify-end gap-2 mt-3">
               <Button
                 variant="outline"
                 onClick={() => {
-                  URL.revokeObjectURL(preview.url);
+                  try {
+                    URL.revokeObjectURL(preview.url);
+                  } catch {}
                   setPreview(null);
                 }}
               >
-                Retake
+                {preview.readOnly ? "Close" : "Retake"}
               </Button>
-              <Button onClick={confirmUploadFromPreview} disabled={uploadPhoto.isPending}>
-                {uploadPhoto.isPending ? "Uploading..." : "Upload"}
-              </Button>
+              {!preview.readOnly && (
+                <Button
+                  onClick={confirmUploadFromPreview}
+                  disabled={uploadPhoto.isPending}
+                >
+                  {uploadPhoto.isPending ? "Uploading..." : "Upload"}
+                </Button>
+              )}
             </div>
           </div>
         </div>

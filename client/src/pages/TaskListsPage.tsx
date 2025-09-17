@@ -1,11 +1,16 @@
-// client/src/pages/TaskListRunPage.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Camera, Check, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -18,22 +23,15 @@ type TemplateItem = {
 };
 type TemplateSection = { title: string; items: TemplateItem[] };
 
-type TodayTask = {
-  id: number;
-  templateId: number;
-  status: string; // "completed" etc.
-  photoCount?: number | null;
-  photosUploaded?: number | null;
-};
-
-const LISTS_URL = "/task-lists";
+const LISTS_URL = "/tasklists";
 
 export default function TaskListRunPage() {
-  // ✅ Use the correct route pattern, and param typing to silence TS
-  const [, params] = useRoute<{ id: string }>("/task-lists/run/:id");
-  const listId = Number(params?.id ?? 0);
-  const [, setLocation] = useLocation();
+  // Accept BOTH "/tasklists" and "/task-lists"
+  const [, a] = useRoute<{ id: string }>("/tasklists/run/:id");
+  const [, b] = useRoute<{ id: string }>("/task-lists/run/:id");
+  const listId = Number((a?.id ?? b?.id) ?? 0);
 
+  const [, setLocation] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -41,15 +39,17 @@ export default function TaskListRunPage() {
   const isAdmin = user?.role === "master_admin" || user?.role === "admin";
 
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(
-    isAdmin ? null : (user?.storeId ?? null)
+    isAdmin ? null : (user?.storeId ?? null),
   );
 
   /* -------- list + templates -------- */
-  const { data: list } = useQuery<any>({
+  const { data: list } = useQuery<{ id: number; name: string }>({
     queryKey: ["/api/task-lists", listId],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
-      const r = await fetch(`/api/task-lists/${listId}`, { credentials: "include" });
+      const r = await fetch(`/api/task-lists/${listId}`, {
+        credentials: "include",
+      });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
@@ -59,9 +59,11 @@ export default function TaskListRunPage() {
     queryKey: ["/api/task-lists", listId, "templates"],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
-      const r = await fetch(`/api/task-lists/${listId}/templates`, { credentials: "include" });
+      const r = await fetch(`/api/task-lists/${listId}/templates`, {
+        credentials: "include",
+      });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<TemplateItem[]>;
+      return r.json();
     },
   });
 
@@ -77,9 +79,10 @@ export default function TaskListRunPage() {
 
   const sections: TemplateSection[] = useMemo(
     () => [{ title: "TASKS", items: templates }],
-    [templates]
+    [templates],
   );
 
+  /* -------- runtime state per template -------- */
   type Runtime = {
     [templateId: number]: {
       taskId?: number;
@@ -104,38 +107,40 @@ export default function TaskListRunPage() {
 
   const [state, setState] = useState<Runtime>(initial);
 
-  // Load today's tasks (react-query v5: no onSuccess in options — derive in effect)
-  const { data: todayTasks = [] } = useQuery<TodayTask[]>({
+  // Load today's tasks (no onSuccess in v5 — react in an effect)
+  const { data: today = [] } = useQuery<any[]>({
     queryKey: ["/api/task-lists", listId, "today", selectedStoreId],
-    enabled: Number.isFinite(listId) && !!selectedStoreId,
+    enabled: Number.isFinite(listId) && (!!selectedStoreId || !isAdmin),
     queryFn: async () => {
-      const sid = selectedStoreId;
+      const sid = selectedStoreId ?? user?.storeId;
+      if (!sid) return [];
       const r = await fetch(`/api/task-lists/${listId}/tasks?storeId=${sid}`, {
         credentials: "include",
       });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<TodayTask[]>;
+      return r.json();
     },
   });
 
   useEffect(() => {
-    if (!todayTasks?.length) {
+    // Prime state from today's tasks
+    if (!today || today.length === 0) {
       setState(initial);
       return;
     }
     const next: Runtime = { ...initial };
-    for (const t of todayTasks) {
+    for (const t of today) {
       const tid = Number(t.templateId);
       if (!tid) continue;
       next[tid] = {
         taskId: Number(t.id),
         required: Math.max(0, Number(t.photoCount ?? 0)),
         photos: Number(t.photosUploaded ?? 0),
-        checked: t.status === "completed",
+        checked: String(t.status).toLowerCase() === "completed",
       };
     }
     setState(next);
-  }, [todayTasks, initial]);
+  }, [today, initial]);
 
   const totals = useMemo(() => {
     const ids = Object.keys(state);
@@ -148,16 +153,22 @@ export default function TaskListRunPage() {
     totals.done === totals.total &&
     Object.values(state).every((t) => t.photos >= t.required);
 
-  // idempotent "ensure run" (creates today's tasks if missing)
+  /* -------- actions -------- */
+
+  // Ensure today's tasks exist if missing
   const ensureRun = useMutation({
     mutationFn: async () => {
       const sid = selectedStoreId ?? user?.storeId ?? undefined;
-      const url = sid != null ? `/api/task-lists/${listId}/run?storeId=${sid}` : `/api/task-lists/${listId}/run`;
+      const url =
+        sid != null
+          ? `/api/task-lists/${listId}/run?storeId=${sid}`
+          : `/api/task-lists/${listId}/run`;
       const r = await fetch(url, { method: "POST", credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ created: number; tasks: TodayTask[] }>;
+      return (await r.json()) as { created: number; tasks: any[] };
     },
     onSuccess: (out) => {
+      // update local state immediately
       const next: Runtime = { ...initial };
       for (const t of out.tasks || []) {
         const tid = Number(t.templateId);
@@ -166,14 +177,21 @@ export default function TaskListRunPage() {
           taskId: Number(t.id),
           required: Math.max(0, Number(t.photoCount ?? 0)),
           photos: Number(t.photosUploaded ?? 0),
-          checked: t.status === "completed",
+          checked: String(t.status).toLowerCase() === "completed",
         };
       }
       setState(next);
-      qc.invalidateQueries({ queryKey: ["/api/task-lists", listId, "today", selectedStoreId] });
+      // and refresh “today”
+      qc.invalidateQueries({
+        queryKey: ["/api/task-lists", listId, "today", selectedStoreId],
+      });
     },
     onError: (e: any) => {
-      toast({ title: "Could not prepare tasks", description: String(e?.message || e), variant: "destructive" });
+      toast({
+        title: "Could not prepare tasks",
+        description: String(e?.message || e),
+        variant: "destructive",
+      });
     },
   });
 
@@ -181,9 +199,13 @@ export default function TaskListRunPage() {
     new Promise((resolve) => {
       if (!navigator.geolocation) return resolve({});
       navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        (pos) =>
+          resolve({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          }),
         () => resolve({}),
-        { enableHighAccuracy: true, timeout: 8000 }
+        { enableHighAccuracy: true, timeout: 8000 },
       );
     });
 
@@ -192,8 +214,10 @@ export default function TaskListRunPage() {
       const coords = await getCoords();
       const fd = new FormData();
       fd.append("photo", vars.file);
-      if (coords.latitude != null) fd.append("latitude", String(coords.latitude));
-      if (coords.longitude != null) fd.append("longitude", String(coords.longitude));
+      if (coords.latitude != null)
+        fd.append("latitude", String(coords.latitude));
+      if (coords.longitude != null)
+        fd.append("longitude", String(coords.longitude));
       const r = await fetch(`/api/tasks/${vars.taskId}/photos`, {
         method: "POST",
         credentials: "include",
@@ -213,7 +237,11 @@ export default function TaskListRunPage() {
       });
     },
     onError: (e: any) => {
-      toast({ title: "Upload failed", description: String(e?.message || e), variant: "destructive" });
+      toast({
+        title: "Upload failed",
+        description: String(e?.message || e),
+        variant: "destructive",
+      });
     },
   });
 
@@ -240,31 +268,50 @@ export default function TaskListRunPage() {
       });
     },
     onError: (e: any) => {
-      toast({ title: "Could not complete task", description: String(e?.message || e), variant: "destructive" });
+      toast({
+        title: "Could not complete task",
+        description: String(e?.message || e),
+        variant: "destructive",
+      });
     },
   });
 
   const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
-  const openFile = (templateId: number) => fileInputs.current[templateId]?.click();
+  const openFile = (templateId: number) =>
+    fileInputs.current[templateId]?.click();
 
   const onPickPhoto = async (templateId: number, file: File | null) => {
     if (!file) return;
 
-    // Admin must choose a store first
-    if (isAdmin && !selectedStoreId) {
-      toast({ title: "Choose a store", description: "Pick a store before uploading photos." });
-      return;
-    }
-
+    // Make sure today's tasks exist
     let rt = state[templateId];
-
-    // If today's tasks aren’t provisioned yet, provision them now (idempotent)
     if (!rt?.taskId) {
-      await ensureRun.mutateAsync();
-      rt = state[templateId];
+      const out = await ensureRun.mutateAsync();
+      const created = out.tasks?.find(
+        (t) => Number(t.templateId) === Number(templateId),
+      );
+      if (created) {
+        rt = {
+          taskId: Number(created.id),
+          required: Math.max(0, Number(created.photoCount ?? 0)),
+          photos: Number(created.photosUploaded ?? 0),
+          checked: String(created.status).toLowerCase() === "completed",
+        };
+        setState((s) => ({
+          ...s,
+          [templateId]: { ...(s[templateId] || {}), ...rt! },
+        }));
+      } else {
+        // fallback to current state (should already be updated via onSuccess)
+        rt = state[templateId];
+      }
     }
+
     if (!rt?.taskId) {
-      toast({ title: "No task ready", description: "Could not prepare today's task for this list." });
+      toast({
+        title: "No task ready",
+        description: "Could not prepare today's task for this list.",
+      });
       return;
     }
 
@@ -282,6 +329,8 @@ export default function TaskListRunPage() {
     if (window.history.length > 1) window.history.back();
     else setLocation(LISTS_URL);
   };
+
+  /* -------- UI -------- */
 
   return (
     <div className="p-4 md:p-6">
@@ -310,14 +359,19 @@ export default function TaskListRunPage() {
               </SelectTrigger>
               <SelectContent>
                 {stores.map((s: any) => (
-                  <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                  <SelectItem key={s.id} value={String(s.id)}>
+                    {s.name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           )}
 
-          {/* Overall Complete (optional) */}
-          <Button disabled={!canComplete} variant={canComplete ? "default" : "outline"}>
+          <Button
+            disabled={!canComplete}
+            variant={canComplete ? "default" : "outline"}
+            title={canComplete ? "All items complete" : "Finish all items to complete run"}
+          >
             <Check className="w-4 h-4 mr-2" />
             Complete Run
           </Button>
@@ -327,12 +381,16 @@ export default function TaskListRunPage() {
       {/* progress */}
       <div className="mb-6">
         <div className="flex justify-between text-xs text-muted-foreground mb-1">
-          <span>Progress {totals.done}/{totals.total}</span>
+          <span>
+            Progress {totals.done}/{totals.total}
+          </span>
         </div>
         <div className="h-2 bg-muted rounded-full overflow-hidden">
           <div
             className="h-full bg-emerald-600"
-            style={{ width: `${(totals.done / Math.max(1, totals.total)) * 100}%` }}
+            style={{
+              width: `${(totals.done / Math.max(1, totals.total)) * 100}%`,
+            }}
           />
         </div>
       </div>
@@ -341,21 +399,31 @@ export default function TaskListRunPage() {
       <div className="space-y-4">
         {sections.map((sec) => (
           <Card key={sec.title} className="p-3">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium">{sec.title}</div>
-            </div>
+            <div className="text-sm font-medium mb-2">{sec.title}</div>
 
             <div className="space-y-2">
               {sec.items.map((it) => {
-                const r = state[it.id] || { required: 0, photos: 0, checked: false };
-                const needs = (it.photoRequired ?? false) || (r.required ?? 0) > 0;
+                const r =
+                  state[it.id] || ({ required: 0, photos: 0, checked: false } as Runtime[number]);
+                const needs =
+                  (it.photoRequired ?? false) || (r.required ?? 0) > 0;
                 const disabled = needs && r.photos < (r.required ?? 0);
                 const left = Math.max(0, (r.required ?? 0) - (r.photos ?? 0));
+
                 return (
-                  <div key={it.id} className="flex items-start justify-between gap-3 rounded-md border p-3">
+                  <div
+                    key={it.id}
+                    className="flex items-start justify-between gap-3 rounded-md border p-3"
+                  >
                     <label
-                      className={`flex items-start gap-3 select-none ${disabled ? "opacity-70" : ""}`}
-                      title={disabled ? `Upload ${left} more photo${left === 1 ? "" : "s"} to enable` : "Mark complete"}
+                      className={`flex items-start gap-3 select-none ${
+                        disabled ? "opacity-70" : ""
+                      }`}
+                      title={
+                        disabled
+                          ? `Upload ${left} more photo${left === 1 ? "" : "s"} to enable`
+                          : "Mark complete"
+                      }
                     >
                       <input
                         type="checkbox"
@@ -367,7 +435,9 @@ export default function TaskListRunPage() {
                       <div>
                         <div className="text-sm flex items-center gap-1">
                           {it.title}
-                          {disabled && <Lock className="w-3.5 h-3.5 text-amber-500" />}
+                          {disabled && (
+                            <Lock className="w-3.5 h-3.5 text-amber-500" />
+                          )}
                         </div>
                         {needs && (
                           <div className="text-xs text-muted-foreground mt-0.5">
@@ -375,7 +445,9 @@ export default function TaskListRunPage() {
                           </div>
                         )}
                         {it.description && (
-                          <div className="text-xs text-muted-foreground mt-0.5">{it.description}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {it.description}
+                          </div>
                         )}
                       </div>
                     </label>
@@ -387,13 +459,19 @@ export default function TaskListRunPage() {
                         accept="image/*"
                         capture="environment"
                         className="hidden"
-                        onChange={(e) => onPickPhoto(it.id, e.target.files?.[0] ?? null)}
+                        onChange={(e) =>
+                          onPickPhoto(it.id, e.target.files?.[0] ?? null)
+                        }
                       />
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => openFile(it.id)}
-                        disabled={uploadPhoto.isPending || ensureRun.isPending || (isAdmin && !selectedStoreId)}
+                        disabled={
+                          uploadPhoto.isPending ||
+                          ensureRun.isPending ||
+                          (isAdmin && !selectedStoreId)
+                        }
                         title={
                           isAdmin && !selectedStoreId
                             ? "Choose a store first"

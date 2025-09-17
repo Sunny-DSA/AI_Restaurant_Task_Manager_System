@@ -27,16 +27,14 @@ r.get("/task-lists/:id", authenticateToken, async (req: Request, res: Response) 
   }
 });
 
-// ⛔️ CREATE = ADMINS ONLY
 r.post(
   "/task-lists",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
   async (req: Request, res: Response) => {
     try {
       const me = (req as any).user!;
       const b = req.body ?? {};
-
       const list = await storage.createTaskList({
         name: b.name ?? b.title,
         description: b.description ?? null,
@@ -47,7 +45,6 @@ r.post(
         createdBy: me.id,
         storeId: b.storeId != null ? Number(b.storeId) : undefined,
       });
-
       res.status(201).json({
         ...list,
         createdByName: me.firstName ?? null,
@@ -59,11 +56,10 @@ r.post(
   }
 );
 
-// ⛔️ UPDATE = ADMINS ONLY
 r.put(
   "/task-lists/:id",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -85,11 +81,10 @@ r.put(
   }
 );
 
-// ⛔️ DELETE = ADMINS ONLY
 r.delete(
   "/task-lists/:id",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -102,7 +97,7 @@ r.delete(
   }
 );
 
-// Templates for a list (🔐 ADMINS ONLY to create/update)
+// Templates for a list
 r.get("/task-lists/:id/templates", authenticateToken, async (req: Request, res: Response) => {
   try {
     const listId = Number(req.params.id);
@@ -117,10 +112,11 @@ r.get("/task-lists/:id/templates", authenticateToken, async (req: Request, res: 
   }
 });
 
+// Create one template
 r.post(
   "/task-lists/:id/templates",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
   async (req: Request, res: Response) => {
     try {
       const listId = Number(req.params.id);
@@ -151,10 +147,11 @@ r.post(
   }
 );
 
+// Update one template
 r.put(
   "/task-lists/templates/:templateId",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.templateId);
@@ -179,8 +176,9 @@ r.put(
   }
 );
 
-/* ========= Run-page helpers (unchanged) ========= */
+/* ========= for run page ========= */
 
+// Today’s tasks for a list + store (no auto-create here)
 r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Response) => {
   try {
     const me = (req as any).user!;
@@ -208,6 +206,7 @@ r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Resp
   }
 });
 
+// Ensure today’s task exists for a given template + store
 r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, res: Response) => {
   try {
     const me = (req as any).user!;
@@ -251,11 +250,11 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
   }
 });
 
-// Minimal import stub (admins only)
+// Barebones import to support your CreateTaskDialog flow
 r.post(
   "/task-lists/import",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
   async (req, res) => {
     try {
       const b = req.body ?? {};
