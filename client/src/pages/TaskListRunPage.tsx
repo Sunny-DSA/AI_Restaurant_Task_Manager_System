@@ -2,13 +2,7 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  ArrowLeft,
-  Camera,
-  Check,
-  Lock,
-  Search as SearchIcon,
-} from "lucide-react";
+import { ArrowLeft, Camera, Check, Lock, Search as SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -32,7 +26,15 @@ type TemplateItem = {
   description?: string | null;
   photoRequired?: boolean;
   photoCount?: number | null;
+
+  // Optional ordering hints if your API returns them
+  position?: number | null;
+  sortOrder?: number | null;
+  order?: number | null;
+  index?: number | null;
+  createdAt?: string | null;
 };
+
 type TemplateSection = { title: string; items: TemplateItem[] };
 
 type TodayTask = {
@@ -61,6 +63,30 @@ type Runtime = {
 };
 
 /* =========================
+   Client-side ordering helper
+========================= */
+function orderTemplates(items: TemplateItem[]): TemplateItem[] {
+  return [...items].sort((a, b) => {
+    // 1) explicit position-ish field wins if present
+    const aPos =
+      (a.position ?? a.sortOrder ?? a.order ?? a.index) ??
+      Number.POSITIVE_INFINITY;
+    const bPos =
+      (b.position ?? b.sortOrder ?? b.order ?? b.index) ??
+      Number.POSITIVE_INFINITY;
+    if (aPos !== bPos) return aPos - bPos;
+
+    // 2) createdAt (older first)
+    const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (aCreated !== bCreated) return aCreated - bCreated;
+
+    // 3) fallback to id (older first)
+    return Number(a.id) - Number(b.id);
+  });
+}
+
+/* =========================
    Component
 ========================= */
 export default function TaskListRunPage() {
@@ -84,24 +110,19 @@ export default function TaskListRunPage() {
   );
 
   // Filters
-  const [showMode, setShowMode] = useState<
-    "all" | "needs" | "incomplete" | "completed"
-  >("all");
+  const [showMode, setShowMode] = useState<"all" | "needs" | "incomplete" | "completed">("all");
   const [q, setQ] = useState("");
 
   // Preview modal (also used as lightbox for session thumbs)
   const [preview, setPreview] = useState<{
     templateId: number;
     url: string;
-    // upload if file exists and readOnly !== true
     file?: File;
     readOnly?: boolean;
   } | null>(null);
 
   // Session thumbnails (per taskId)
-  const [sessionPhotos, setSessionPhotos] = useState<Record<number, string[]>>(
-    {},
-  );
+  const [sessionPhotos, setSessionPhotos] = useState<Record<number, string[]>>({});
 
   // Ensure today's run got "primed"
   const [runPrimed, setRunPrimed] = useState(false);
@@ -111,9 +132,7 @@ export default function TaskListRunPage() {
     queryKey: ["/api/task-lists", listId],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
-      const r = await fetch(`/api/task-lists/${listId}`, {
-        credentials: "include",
-      });
+      const r = await fetch(`/api/task-lists/${listId}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
@@ -128,18 +147,20 @@ export default function TaskListRunPage() {
     queryKey: ["/api/task-lists", listId, "templates"],
     enabled: Number.isFinite(listId),
     queryFn: async () => {
-      const r = await fetch(`/api/task-lists/${listId}/templates`, {
-        credentials: "include",
-      });
+      const r = await fetch(`/api/task-lists/${listId}/templates`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
+    staleTime: 15_000,
   });
+
+  // enforce display order (as created or explicit position)
+  const templatesOrdered = useMemo(() => orderTemplates(templates), [templates]);
 
   /* -------- initial runtime by templates -------- */
   const initialRuntime: Runtime = useMemo(() => {
     const next: Runtime = {};
-    for (const t of templates) {
+    for (const t of templatesOrdered) {
       next[t.id] = {
         taskId: undefined,
         required: Math.max(0, Number(t.photoCount ?? 0)),
@@ -148,13 +169,10 @@ export default function TaskListRunPage() {
       };
     }
     return next;
-  }, [templates]);
+  }, [templatesOrdered]);
 
   const [state, setState] = useState<Runtime>({});
-
-  useEffect(() => {
-    setState(initialRuntime);
-  }, [initialRuntime]);
+  useEffect(() => setState(initialRuntime), [initialRuntime]);
 
   /* -------- stores (admins only) -------- */
   const { data: stores = [] } = useQuery<any[]>({
@@ -184,13 +202,11 @@ export default function TaskListRunPage() {
     enabled: Number.isFinite(listId) && !!(selectedStoreId ?? user?.storeId),
     queryFn: async () => {
       const sid = selectedStoreId ?? user?.storeId;
-      const r = await fetch(
-        `/api/task-lists/${listId}/tasks?storeId=${sid}`,
-        { credentials: "include" },
-      );
+      const r = await fetch(`/api/task-lists/${listId}/tasks?storeId=${sid}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
+    staleTime: 10_000,
   });
 
   // Fold server tasks into runtime
@@ -216,8 +232,8 @@ export default function TaskListRunPage() {
 
   /* -------- small helpers -------- */
   const sections: TemplateSection[] = useMemo(
-    () => [{ title: "TASKS", items: templates }],
-    [templates],
+    () => [{ title: "TASKS", items: templatesOrdered }],
+    [templatesOrdered],
   );
 
   const totals = useMemo(() => {
@@ -299,9 +315,7 @@ export default function TaskListRunPage() {
     mutationFn: async (vars: { templateId: number }) => {
       const sid = selectedStoreId ?? user?.storeId;
       const r = await fetch(
-        `/api/task-lists/${listId}/ensure-task${
-          sid ? `?storeId=${sid}` : ""
-        }`,
+        `/api/task-lists/${listId}/ensure-task${sid ? `?storeId=${sid}` : ""}`,
         {
           method: "POST",
           credentials: "include",
@@ -350,10 +364,8 @@ export default function TaskListRunPage() {
       const coords = await getCoords();
       const fd = new FormData();
       fd.append("photo", vars.file);
-      if (coords.latitude != null)
-        fd.append("latitude", String(coords.latitude));
-      if (coords.longitude != null)
-        fd.append("longitude", String(coords.longitude));
+      if (coords.latitude != null) fd.append("latitude", String(coords.latitude));
+      if (coords.longitude != null) fd.append("longitude", String(coords.longitude));
 
       const r = await fetch(`/api/tasks/${vars.taskId}/photos`, {
         method: "POST",
@@ -453,8 +465,7 @@ export default function TaskListRunPage() {
     if (incomplete.length > 0) {
       toast({
         title: "Incomplete tasks",
-        description:
-          "You need to complete all tasks and upload required photos.",
+        description: "You need to complete all tasks and upload required photos.",
         variant: "destructive",
       });
       return;
@@ -504,8 +515,7 @@ export default function TaskListRunPage() {
     if (!preview) return;
     try {
       if (preview.readOnly || !preview.file) {
-        // Just close for read-only lightbox
-        URL.revokeObjectURL(preview.url);
+        try { URL.revokeObjectURL(preview.url); } catch {}
         setPreview(null);
         return;
       }
@@ -532,9 +542,7 @@ export default function TaskListRunPage() {
         file: preview.file,
       });
     } finally {
-      try {
-        URL.revokeObjectURL(preview.url);
-      } catch {}
+      try { URL.revokeObjectURL(preview.url); } catch {}
       setPreview(null);
     }
   };
@@ -546,9 +554,7 @@ export default function TaskListRunPage() {
       const needs = (it.photoRequired ?? false) || (r.required ?? 0) > 0;
       const incomplete = !r.checked;
       const matchesQ = q.trim()
-        ? `${it.title} ${it.description ?? ""}`
-            .toLowerCase()
-            .includes(q.trim().toLowerCase())
+        ? `${it.title} ${it.description ?? ""}`.toLowerCase().includes(q.trim().toLowerCase())
         : true;
 
       if (!matchesQ) return false;
@@ -580,12 +586,8 @@ export default function TaskListRunPage() {
             Back
           </Button>
           <div>
-            <h2 className="text-xl font-semibold">
-              {list?.name ?? "Task List"}
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Upload photos and complete items
-            </p>
+            <h2 className="text-xl font-semibold">{list?.name ?? "Task List"}</h2>
+            <p className="text-sm text-muted-foreground">Upload photos and complete items</p>
           </div>
         </div>
 
@@ -649,15 +651,11 @@ export default function TaskListRunPage() {
                   onClick={async () => {
                     const coords = await getCoords();
                     if (coords.latitude != null && coords.longitude != null) {
-                      doCheckIn.mutate({
-                        latitude: coords.latitude,
-                        longitude: coords.longitude,
-                      });
+                      doCheckIn.mutate({ latitude: coords.latitude, longitude: coords.longitude });
                     } else {
                       toast({
                         title: "Location required",
-                        description:
-                          "Enable location and try again near the store.",
+                        description: "Enable location and try again near the store.",
                         variant: "destructive",
                       });
                     }
@@ -709,16 +707,12 @@ export default function TaskListRunPage() {
       {/* Progress bar */}
       <div className="mb-6">
         <div className="flex justify-between text-xs text-muted-foreground mb-1">
-          <span>
-            Progress {totals.done}/{totals.total}
-          </span>
+          <span>Progress {totals.done}/{totals.total}</span>
         </div>
         <div className="h-2 bg-muted rounded-full overflow-hidden">
           <div
             className="h-full bg-emerald-600"
-            style={{
-              width: `${(totals.done / Math.max(1, totals.total)) * 100}%`,
-            }}
+            style={{ width: `${(totals.done / Math.max(1, totals.total)) * 100}%` }}
           />
         </div>
       </div>
@@ -750,39 +744,22 @@ export default function TaskListRunPage() {
 
               <div className="space-y-2">
                 {items.map((it) => {
-                  const r = state[it.id] || {
-                    required: 0,
-                    photos: 0,
-                    checked: false,
-                  };
-                  const needs =
-                    (it.photoRequired ?? false) || (r.required ?? 0) > 0;
+                  const r = state[it.id] || { required: 0, photos: 0, checked: false };
+                  const needs = (it.photoRequired ?? false) || (r.required ?? 0) > 0;
                   const disabled = needs && r.photos < (r.required ?? 0);
-                  const left = Math.max(
-                    0,
-                    (r.required ?? 0) - (r.photos ?? 0),
-                  );
-                  const isFull =
-                    (r.required ?? 0) > 0 &&
-                    (r.photos ?? 0) >= (r.required ?? 0);
+                  const left = Math.max(0, (r.required ?? 0) - (r.photos ?? 0));
+                  const isFull = (r.required ?? 0) > 0 && (r.photos ?? 0) >= (r.required ?? 0);
 
                   const taskId = r.taskId;
                   const thumbs = taskId ? sessionPhotos[taskId] || [] : [];
 
                   return (
-                    <div
-                      key={it.id}
-                      className="flex items-start justify-between gap-3 rounded-md border p-3"
-                    >
+                    <div key={it.id} className="flex items-start justify-between gap-3 rounded-md border p-3">
                       <label
-                        className={`flex items-start gap-3 select-none ${
-                          disabled ? "opacity-70" : ""
-                        }`}
+                        className={`flex items-start gap-3 select-none ${disabled ? "opacity-70" : ""}`}
                         title={
                           disabled
-                            ? `Upload ${left} more photo${
-                                left === 1 ? "" : "s"
-                              } to unlock`
+                            ? `Upload ${left} more photo${left === 1 ? "" : "s"} to unlock`
                             : "Mark complete"
                         }
                       >
@@ -796,34 +773,21 @@ export default function TaskListRunPage() {
                         <div>
                           <div className="text-sm flex items-center gap-1">
                             {it.title}
-                            {disabled && (
-                              <Lock className="w-3.5 h-3.5 text-amber-500" />
-                            )}
+                            {disabled && <Lock className="w-3.5 h-3.5 text-amber-500" />}
                           </div>
 
-                          {/* Helper line */}
                           {needs && (
                             <div className="text-xs mt-0.5">
-                              <span
-                                className={
-                                  left > 0
-                                    ? "text-amber-600"
-                                    : "text-muted-foreground"
-                                }
-                              >
+                              <span className={left > 0 ? "text-amber-600" : "text-muted-foreground"}>
                                 {left > 0
-                                  ? `Upload ${left} more photo${
-                                      left === 1 ? "" : "s"
-                                    } to unlock`
+                                  ? `Upload ${left} more photo${left === 1 ? "" : "s"} to unlock`
                                   : `Photos required: ${r.photos}/${r.required}`}
                               </span>
                             </div>
                           )}
 
                           {it.description && (
-                            <div className="text-xs text-muted-foreground mt-0.5">
-                              {it.description}
-                            </div>
+                            <div className="text-xs text-muted-foreground mt-0.5">{it.description}</div>
                           )}
 
                           {/* Session thumbnails */}
@@ -842,10 +806,7 @@ export default function TaskListRunPage() {
                                   className="w-12 h-12 rounded overflow-hidden border"
                                   title="View photo"
                                 >
-                                  <img
-                                    src={u}
-                                    className="w-full h-full object-cover"
-                                  />
+                                  <img src={u} className="w-full h-full object-cover" />
                                 </button>
                               ))}
                             </div>
@@ -870,9 +831,7 @@ export default function TaskListRunPage() {
                             let rt = state[it.id];
                             if (!rt?.taskId) {
                               try {
-                                const created = await ensureTask.mutateAsync({
-                                  templateId: it.id,
-                                });
+                                const created = await ensureTask.mutateAsync({ templateId: it.id });
                                 setState((s) => ({
                                   ...s,
                                   [it.id]: {
@@ -894,15 +853,9 @@ export default function TaskListRunPage() {
                             // Upload sequentially, respecting remaining cap
                             for (const f of files) {
                               const cur = state[it.id] || { required: 0, photos: 0 };
-                              const remaining = Math.max(
-                                0,
-                                (cur.required ?? 0) - (cur.photos ?? 0),
-                              );
+                              const remaining = Math.max(0, (cur.required ?? 0) - (cur.photos ?? 0));
                               if ((cur.required ?? 0) > 0 && remaining <= 0) break;
-                              await uploadPhoto.mutateAsync({
-                                taskId: Number(rt!.taskId),
-                                file: f,
-                              });
+                              await uploadPhoto.mutateAsync({ taskId: Number(rt!.taskId), file: f });
                             }
                             e.currentTarget.value = "";
                           }}
@@ -920,11 +873,7 @@ export default function TaskListRunPage() {
                               return;
                             }
                             if (isAdmin && !selectedStoreId) {
-                              toast({
-                                title: "Choose a store",
-                                description:
-                                  "Pick a store before uploading photos.",
-                              });
+                              toast({ title: "Choose a store", description: "Pick a store before uploading photos." });
                               return;
                             }
                             openFile(it.id);
@@ -935,11 +884,7 @@ export default function TaskListRunPage() {
                             (isAdmin && !selectedStoreId) ||
                             isFull
                           }
-                          title={
-                            isFull
-                              ? "Upload limit reached"
-                              : "Add photo(s)"
-                          }
+                          title={isFull ? "Upload limit reached" : "Add photo(s)"}
                         >
                           <Camera className="w-4 h-4 mr-2" />
                           Add Photo
@@ -959,26 +904,15 @@ export default function TaskListRunPage() {
         <div className="mx-auto max-w-5xl bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border rounded-xl p-3 shadow pointer-events-auto">
           <div className="flex items-center gap-3">
             <div className="flex-1">
-              <div className="text-xs text-muted-foreground mb-1">
-                Progress {totals.done}/{totals.total}
-              </div>
+              <div className="text-xs text-muted-foreground mb-1">Progress {totals.done}/{totals.total}</div>
               <div className="h-2 bg-muted rounded-full overflow-hidden">
                 <div
-                  className={`h-full ${
-                    canComplete ? "bg-emerald-600" : "bg-primary"
-                  }`}
-                  style={{
-                    width: `${(totals.done / Math.max(1, totals.total)) * 100}%`,
-                  }}
+                  className={`h-full ${canComplete ? "bg-emerald-600" : "bg-primary"}`}
+                  style={{ width: `${(totals.done / Math.max(1, totals.total)) * 100}%` }}
                 />
               </div>
             </div>
-            <Button
-              size="sm"
-              className="whitespace-nowrap"
-              disabled={!canComplete}
-              onClick={handleCompleteRun}
-            >
+            <Button size="sm" className="whitespace-nowrap" disabled={!canComplete} onClick={handleCompleteRun}>
               <Check className="w-4 h-4 mr-2" />
               Complete Run
             </Button>
@@ -990,27 +924,20 @@ export default function TaskListRunPage() {
       {preview && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
           <div className="bg-white rounded-lg shadow max-w-md w-full p-4">
-            <div className="font-medium mb-2">
-              {preview.readOnly ? "Photo" : "Preview"}
-            </div>
+            <div className="font-medium mb-2">{preview.readOnly ? "Photo" : "Preview"}</div>
             <img src={preview.url} alt="preview" className="w-full rounded border" />
             <div className="flex justify-end gap-2 mt-3">
               <Button
                 variant="outline"
                 onClick={() => {
-                  try {
-                    URL.revokeObjectURL(preview.url);
-                  } catch {}
+                  try { URL.revokeObjectURL(preview.url); } catch {}
                   setPreview(null);
                 }}
               >
                 {preview.readOnly ? "Close" : "Retake"}
               </Button>
               {!preview.readOnly && (
-                <Button
-                  onClick={confirmUploadFromPreview}
-                  disabled={uploadPhoto.isPending}
-                >
+                <Button onClick={confirmUploadFromPreview} disabled={uploadPhoto.isPending}>
                   {uploadPhoto.isPending ? "Uploading..." : "Upload"}
                 </Button>
               )}

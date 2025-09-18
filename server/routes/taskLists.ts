@@ -6,11 +6,40 @@ import { roleEnum, taskStatusEnum } from "@shared/schema";
 
 const r = Router();
 
-// Lists
+/* ------------- ordering helpers (no schema change required) ------------- */
+function pickNum(...vals: Array<number | null | undefined>): number | null {
+  for (const v of vals) {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+function toMs(d?: string | null): number {
+  return d ? new Date(d).getTime() || 0 : 0;
+}
+function orderByCreation<T extends Record<string, any>>(rows: T[]): T[] {
+  // Prefer explicit position/sort, then createdAt, then id
+  return [...(rows || [])].sort((a, b) => {
+    const aPos = pickNum(a.position, a.sortOrder, a.order, a.index);
+    const bPos = pickNum(b.position, b.sortOrder, b.order, b.index);
+    if (aPos !== null || bPos !== null) {
+      if (aPos === null) return 1;
+      if (bPos === null) return -1;
+      if (aPos !== bPos) return aPos - bPos;
+    }
+
+    const aC = toMs(a.createdAt);
+    const bC = toMs(b.createdAt);
+    if (aC !== bC) return aC - bC;
+
+    return Number(a.id) - Number(b.id);
+  });
+}
+
+/* ----------------------------- Lists ------------------------------ */
 r.get("/task-lists", authenticateToken, async (_req: Request, res: Response) => {
   try {
     const lists = await storage.getTaskLists();
-    res.json(lists || []);
+    res.json(orderByCreation(lists || []));
   } catch (err: any) {
     res.status(500).json({ message: err?.message || "Failed to fetch task lists" });
   }
@@ -30,7 +59,7 @@ r.get("/task-lists/:id", authenticateToken, async (req: Request, res: Response) 
 r.post(
   "/task-lists",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const me = (req as any).user!;
@@ -59,7 +88,7 @@ r.post(
 r.put(
   "/task-lists/:id",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -84,7 +113,7 @@ r.put(
 r.delete(
   "/task-lists/:id",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -97,26 +126,33 @@ r.delete(
   }
 );
 
-// Templates for a list
+/* ---------------------- Templates for a list ---------------------- */
 r.get("/task-lists/:id/templates", authenticateToken, async (req: Request, res: Response) => {
   try {
     const listId = Number(req.params.id);
+    let rows: any[] = [];
+
+    // Prefer a storage method if present
     if (typeof (storage as any).getTemplatesByList === "function") {
-      const rows = await (storage as any).getTemplatesByList(listId);
-      return res.json(rows || []);
+      rows = await (storage as any).getTemplatesByList(listId);
+    } else {
+      const all = await storage.getTaskTemplates();
+      rows = (all || []).filter((t: any) => t.listId === listId);
     }
-    const all = await storage.getTaskTemplates();
-    return res.json((all || []).filter((t: any) => t.listId === listId && t.isActive !== false));
+
+    // Active only, ordered for stable display
+    const filtered = (rows || []).filter((t: any) => t.isActive !== false);
+    res.json(orderByCreation(filtered));
   } catch (e: any) {
     res.status(500).json({ message: e?.message || "Failed to fetch templates" });
   }
 });
 
-// Create one template
+/* ---------------- Create / Update a single template --------------- */
 r.post(
   "/task-lists/:id/templates",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const listId = Number(req.params.id);
@@ -138,6 +174,8 @@ r.post(
         photoCount: Number(b.photoCount ?? 0),
         priority: b.priority ?? "normal",
         isActive: true,
+        // If your storage layer supports a position field,
+        // you can also pass it here (optional).
       });
 
       res.status(201).json(row);
@@ -147,11 +185,10 @@ r.post(
   }
 );
 
-// Update one template
 r.put(
   "/task-lists/templates/:templateId",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req: Request, res: Response) => {
     try {
       const id = Number(req.params.templateId);
@@ -166,6 +203,8 @@ r.put(
       if ("photoRequired" in b) patch.photoRequired = !!b.photoRequired;
       if ("photoCount" in b) patch.photoCount = Number(b.photoCount ?? 0);
       if ("priority" in b) patch.priority = b.priority ?? "normal";
+      // If you add drag-sort later, support `position` as well:
+      if ("position" in b) patch.position = Number(b.position);
 
       const updated = await storage.updateTaskTemplate(id, patch);
       if (!updated) return res.status(404).json({ message: "Template not found" });
@@ -176,7 +215,7 @@ r.put(
   }
 );
 
-/* ========= for run page ========= */
+/* -------------------------- For run page -------------------------- */
 
 // Today’s tasks for a list + store (no auto-create here)
 r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Response) => {
@@ -188,16 +227,28 @@ r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Resp
 
     const dateStr = new Date().toISOString().slice(0, 10);
 
-    const allTemplates = await storage.getTaskTemplates();
-    const templates = (allTemplates || []).filter((t: any) => t.listId === listId && t.isActive !== false);
-    const templateIds = templates.map((t: any) => t.id);
+    // fetch templates to know which belong to this list
+    const _allTemplates = await storage.getTaskTemplates();
+    const templates = (_allTemplates || []).filter((t: any) => t.listId === listId && t.isActive !== false);
+    const templatesOrdered = orderByCreation(templates);
+    const templateIds = templatesOrdered.map((t: any) => t.id);
 
+    // fetch tasks and keep only today's tasks for those templates
     const allTasks = await storage.getTasks({ storeId: qStoreId });
     const byList = (allTasks || []).filter((t: any) => {
       if (!t.templateId || !templateIds.includes(t.templateId)) return false;
       const d = t.scheduledFor ? new Date(t.scheduledFor) : null;
       const dStr = d ? d.toISOString().slice(0, 10) : "";
       return dStr === dateStr;
+    });
+
+    // Ensure tasks are returned in the same order as templates
+    const orderMap = new Map<number, number>();
+    templateIds.forEach((tid, idx) => orderMap.set(tid, idx));
+    byList.sort((a: any, b: any) => {
+      const ai = orderMap.get(a.templateId) ?? 999999;
+      const bi = orderMap.get(b.templateId) ?? 999999;
+      return ai - bi || (Number(a.id) - Number(b.id));
     });
 
     res.json(byList);
@@ -254,7 +305,7 @@ r.post("/task-lists/:id/ensure-task", authenticateToken, async (req: Request, re
 r.post(
   "/task-lists/import",
   authenticateToken,
-  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]), // 🔒 managers removed
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN]),
   async (req, res) => {
     try {
       const b = req.body ?? {};
