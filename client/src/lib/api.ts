@@ -620,7 +620,7 @@ export const taskListApi = {
 };
 
 /* =========
-   NEW: Admin previews + photo feed
+   NEW: Admin previews + photo feed (enhanced)
    ========= */
 
 export interface AdminTaskPreview {
@@ -640,10 +640,18 @@ export interface AdminPhotoFeedItem {
   taskId: number | null;
   taskItemId: number | null;
   uploadedAt: string;
-  uploadedBy: number | null;
+  uploadedById?: number | null;
   uploadedByName: string | null;
   uploadedByRole: string | null;
   photoUrl: string;
+  task: {
+    id: number;
+    title?: string | null;
+    listId?: number | null;
+    listName?: string | null;
+    templateId?: number | null;
+    templateTitle?: string | null;
+  } | null;
   store: {
     id: number;
     name: string | null;
@@ -660,14 +668,29 @@ export const adminApi = {
     return apiRequest<AdminTaskPreview[]>("GET", "/api/admin/task-previews");
   },
 
-  photoFeed(opts?: { storeId?: number; limit?: number }): Promise<AdminPhotoFeedItem[]> {
+  photoFeed(opts?: {
+    storeId?: number;
+    userId?: number;
+    limit?: number;
+    sort?: "newest" | "oldest";
+    dateFrom?: string | Date;
+    dateTo?: string | Date;
+  }): Promise<AdminPhotoFeedItem[]> {
     const qs = new URLSearchParams();
+    const toIso = (v: any) => (v instanceof Date ? v.toISOString() : String(v));
+
     if (opts?.storeId) qs.append("storeId", String(opts.storeId));
+    if (opts?.userId) qs.append("userId", String(opts.userId));
     if (opts?.limit) qs.append("limit", String(Math.min(200, Math.max(1, opts.limit))));
+    if (opts?.sort) qs.append("sort", opts.sort);
+    if (opts?.dateFrom) qs.append("dateFrom", toIso(opts.dateFrom));
+    if (opts?.dateTo) qs.append("dateTo", toIso(opts.dateTo));
+
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return apiRequest<AdminPhotoFeedItem[]>("GET", `/api/admin/photo-feed${suffix}`);
   },
 };
+
 
 export const photosApi = {
   url(id: number | null | undefined): string | null {
