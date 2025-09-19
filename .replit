@@ -8,8 +8,8 @@ packages = ["imagemagick_light", "psmisc", "lsof"]
 
 [deployment]
 deploymentTarget = "autoscale"
-build = ["npm", "run", "build"]
-run = ["npm", "run", "start"]
+build = ["sh", "-c", "./deploy-build.sh"]
+run = ["sh", "-c", "npm run start"]
 
 [[ports]]
 localPort = 3000
