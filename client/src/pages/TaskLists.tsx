@@ -88,7 +88,16 @@ type ParsedImport = {
   assigneeId?: number | null;
   recurrenceType: "none" | "daily" | "weekly" | "monthly";
   recurrencePattern?: string | null;
-  sections: { title: string; items: { title: string; description?: string | null; priority?: "low" | "medium" | "high"; photoRequired?: boolean; photoCount?: number }[] }[];
+  sections: {
+    title: string;
+    items: {
+      title: string;
+      description?: string | null;
+      priority?: "low" | "medium" | "high";
+      photoRequired?: boolean;
+      photoCount?: number;
+    }[];
+  }[];
 };
 
 type Progress = { total: number; done: number };
@@ -113,7 +122,9 @@ function ProgressBar({ value }: { value: number }) {
   return (
     <div className="h-2 rounded bg-muted w-full overflow-hidden">
       <div
-        className={`h-full rounded transition-all ${value >= 100 ? "bg-emerald-600" : value > 0 ? "bg-blue-600" : "bg-gray-400"}`}
+        className={`h-full rounded transition-all ${
+          value >= 100 ? "bg-emerald-600" : value > 0 ? "bg-blue-600" : "bg-gray-400"
+        }`}
         style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
       />
     </div>
@@ -154,6 +165,7 @@ export default function TaskLists() {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
+    staleTime: 15_000,
   });
 
   const { data: stores = [] } = useQuery({
@@ -164,6 +176,7 @@ export default function TaskLists() {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
+    staleTime: 60_000,
   });
 
   // mutations
@@ -245,9 +258,15 @@ export default function TaskLists() {
           l.description?.toLowerCase().includes(q)
       );
     }
+
+    // ✅ STORE FILTER: include global lists (storeId null) OR lists matching the selected store
     if (isAdmin && storeFilter !== "all") {
-      out = out.filter((l: any) => String(l.storeId ?? "") === storeFilter);
+      out = out.filter(
+        (l: any) =>
+          l.storeId == null || String(l.storeId) === storeFilter
+      );
     }
+
     if (statusFilter !== "all") {
       out = out.filter((l: any) => {
         const lab = getDueLabel(l.recurrenceType);
@@ -481,6 +500,21 @@ function TaskListCard({
   const due = getDueLabel(list.recurrenceType);
   const needsStore = isAdmin && storeId == null;
 
+  // ✅ Always load template count so we can show 0/30 even if no tasks yet.
+  const { data: templates = [] } = useQuery<any[]>({
+    queryKey: ["/api/task-lists", list.id, "templates"],
+    enabled: inView, // lazy
+    queryFn: async () => {
+      const r = await fetch(`/api/task-lists/${list.id}/templates`, {
+        credentials: "include",
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    staleTime: 15_000,
+  });
+
+  // Only fetch today's tasks when we actually have a store to check against.
   const { data: progress, isFetching } = useQuery<Progress>({
     queryKey: ["list-progress", list.id, storeId ?? "none"],
     enabled: inView && !needsStore,
@@ -492,20 +526,22 @@ function TaskListCard({
       if (!r.ok) throw new Error(await r.text());
       const tasks = (await r.json()) as any[];
       const done = tasks.filter((t) => t.status === "completed").length;
-      const total = Number(list.templateCount ?? tasks.length ?? 0) || 0;
-      return { done, total };
+      return { done, total: templates.length };
     },
     staleTime: 10_000,
   });
 
-  const total = progress?.total ?? Number(list.templateCount ?? 0) ?? 0;
+  const total = templates.length; // <- authoritative total
   const done = progress?.done ?? 0;
   const pct = total > 0 ? Math.round((done / Math.max(1, total)) * 100) : 0;
 
   return (
     <Card
       ref={ref}
-      className="hover:shadow-md transition-shadow border-t-4 border-t-transparent hover:border-t-blue-500"
+      className="hover:shadow-md transition-shadow border-t-4 border-t-transparent hover:border-t-blue-500 cursor-pointer"
+      onClick={onOpen}         // ✅ whole card clickable
+      role="button"
+      tabIndex={0}
     >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
@@ -520,7 +556,10 @@ function TaskListCard({
 
           {/* admin tools only */}
           {isAdmin && (canUpdate || canDelete) && (
-            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="flex items-center gap-1"
+              onClick={(e) => e.stopPropagation()} // keep buttons from opening the card
+            >
               {canUpdate && (
                 <>
                   <Button variant="ghost" size="sm" title="Duplicate" onClick={onDuplicate}>
@@ -547,7 +586,14 @@ function TaskListCard({
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-3" onClick={onOpen}>
+      <CardContent
+        className="space-y-3"
+        onClick={(e) => {
+          // Clicks from inside content should also open (kept for backward compatibility)
+          e.stopPropagation();
+          onOpen();
+        }}
+      >
         {/* badges */}
         <div className="flex flex-wrap gap-2">
           <Badge variant="secondary" className="flex items-center gap-1">
