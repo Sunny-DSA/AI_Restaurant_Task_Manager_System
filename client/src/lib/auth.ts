@@ -14,8 +14,9 @@ export const roleColors: Record<string, string> = {
 };
 
 /**
- * Phase-1 rule: ONLY admins can create/update/delete/import task lists.
- * Store managers are read-only (same as employees) for task lists.
+ * Phase-1 rule:
+ * - ONLY admins can create/update/delete/import task lists.
+ * - Store managers should have the SAME surface as employees (Dashboard, Tasks, Task Lists).
  */
 export function hasPermission(
   userRole: string,
@@ -39,14 +40,11 @@ export function hasPermission(
       templates: ["create", "read", "update"],
       reports: ["read", "export"],
     },
+
+    // 👇 Store manager == Employee (no Stores/Users/Reports modules)
     store_manager: {
-      stores: ["read"],
-      users: ["read"],
-      tasks: ["read", "update", "assign", "complete"],
-      // 🔒 read-only for task lists:
+      tasks: ["read", "complete"],
       task_lists: ["read"],
-      templates: ["read"],
-      reports: ["read"],
     },
     employee: {
       tasks: ["read", "complete"],
@@ -59,14 +57,21 @@ export function hasPermission(
   return !!modulePerms && modulePerms.includes(action);
 }
 
+/**
+ * Page access:
+ * - Admins (admin/master_admin): all pages.
+ * - store_manager and employee: ONLY dashboard, tasks, task_lists.
+ */
 export function canAccessPage(userRole: string, page: string): boolean {
   const pagePermissions: Record<string, string[]> = {
     dashboard: ["master_admin", "admin", "store_manager", "employee"],
     tasks: ["master_admin", "admin", "store_manager", "employee"],
     task_lists: ["master_admin", "admin", "store_manager", "employee"],
-    stores: ["master_admin", "admin", "store_manager"],
-    users: ["master_admin", "admin", "store_manager"],
-    reports: ["master_admin", "admin", "store_manager"],
+    // Admin-only pages:
+    stores: ["master_admin", "admin"],
+    users: ["master_admin", "admin"],
+    reports: ["master_admin", "admin"],
+    admin: ["master_admin", "admin"], // for any /admin/* utilities (e.g., photo feed)
   };
   const allowed = pagePermissions[page];
   return allowed ? allowed.includes(userRole) : false;

@@ -7,6 +7,7 @@ import taskListsRoutes from "./taskLists";
 import adminRoutes from "./admin";
 import photosRoutes from "./photos";
 import checkinsRoutes from "./checkins"; // ✅ NEW: exposes /api/checkins/me
+import analyticsRoutes from "./analytics";
 
 const router = Router();
 
@@ -19,5 +20,6 @@ router.use(tasksRoutes);
 router.use(taskListsRoutes);
 router.use(adminRoutes);
 router.use(photosRoutes);
+router.use(analyticsRoutes);
 
 export default router;

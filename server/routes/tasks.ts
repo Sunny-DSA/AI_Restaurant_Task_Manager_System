@@ -27,28 +27,19 @@ const isManager = (u: UserLike) => u.role === roleEnum.STORE_MANAGER;
 const isEmployee = (u: UserLike) => u.role === roleEnum.EMPLOYEE;
 
 function canTouchTask(task: any, user: UserLike): boolean {
-  // Admin: full access
   if (isAdmin(user)) return true;
-
-  // Manager: their store only
   if (isManager(user)) {
     if (!user.storeId) return false;
     return Number(task.storeId) === Number(user.storeId);
   }
-
-  // Employee:
-  // - store_wide: allowed for same store
-  // - specific_employee: only if assigned to them
   if (isEmployee(user)) {
     if (!user.storeId) return false;
     if (Number(task.storeId) !== Number(user.storeId)) return false;
-
     if (task.assigneeId) {
       return Number(task.assigneeId) === Number(user.id);
     }
     return true;
   }
-
   return false;
 }
 
@@ -58,35 +49,114 @@ function nextPhotoLimit(task: any): { needed: number; have: number; allowed: boo
   return { needed: need, have, allowed: have < need || need === 0 };
 }
 
+const toYMD = (d: Date) => d.toISOString().slice(0, 10);
+const isToday = (v?: string | Date | null) => {
+  if (!v) return false;
+  const d = v instanceof Date ? v : new Date(v);
+  return toYMD(d) === toYMD(new Date());
+};
+
+/**
+ * Attach `completedByName` to each task that has `completedBy`.
+ */
+async function attachCompletedNames(rows: any[]): Promise<any[]> {
+  if (!rows || rows.length === 0) return rows;
+
+  const ids = Array.from(
+    new Set(
+      rows
+        .map((t) => (t?.completedBy != null ? Number(t.completedBy) : null))
+        .filter((v): v is number => Number.isFinite(v))
+    )
+  );
+
+  const usersById = new Map<number, { firstName?: string | null; lastName?: string | null }>();
+  for (const id of ids) {
+    try {
+      const u = await storage.getUser(id);
+      if (u) usersById.set(id, { firstName: u.firstName ?? null, lastName: u.lastName ?? null });
+    } catch {}
+  }
+
+  return rows.map((t) => {
+    if (t?.completedBy != null) {
+      const u = usersById.get(Number(t.completedBy));
+      const name =
+        u && (u.firstName || u.lastName)
+          ? [u.firstName, u.lastName].filter(Boolean).join(" ")
+          : `User #${t.completedBy}`;
+      return { ...t, completedByName: name };
+    }
+    return t;
+  });
+}
+
 /* ============== TASKS LISTING/CRUD ============== */
 
 r.get("/tasks/my", authenticateToken, async (req: Request, res: Response) => {
   const user = (req as any).user!;
-  const rows = await storage.getTasks({ assigneeId: user.id });
-  res.json(rows);
+  const todayOnly = String(req.query.todayOnly || "").toLowerCase() === "true";
+
+  if (!user.storeId) {
+    let direct = await storage.getTasks({ assigneeId: user.id });
+    if (todayOnly) direct = (direct || []).filter((t: any) => isToday(t.scheduledFor || t.dueAt || t.createdAt));
+    return res.json(await attachCompletedNames(direct || []));
+  }
+
+  const direct = await storage.getTasks({ assigneeId: user.id });
+  const storeWide = await storage.getTasks({
+    storeId: user.storeId,
+    assigneeType: "store_wide",
+    assigneeId: null,
+  } as any);
+
+  const seen = new Set<number>();
+  let merged = [...(direct || []), ...(storeWide || [])].filter((t: any) => {
+    const id = Number(t.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+
+  if (todayOnly) {
+    merged = merged.filter((t: any) => isToday(t.scheduledFor || t.dueAt || t.createdAt));
+  }
+
+  res.json(await attachCompletedNames(merged || []));
 });
 
 r.get("/tasks/available", authenticateToken, async (req: Request, res: Response) => {
-  const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
-  if (!storeId) return res.status(400).json({ message: "storeId required" });
-  const rows = await storage.getTasks({ storeId, status: taskStatusEnum.AVAILABLE });
-  res.json(rows);
+  const me = (req as any).user!;
+  const qStoreId = req.query.storeId ? Number(req.query.storeId) : (me.storeId ?? undefined);
+  const todayOnly = String(req.query.todayOnly || "").toLowerCase() === "true";
+  if (!qStoreId) return res.status(400).json({ message: "storeId required" });
+
+  let rows = await storage.getTasks({ storeId: qStoreId, status: taskStatusEnum.AVAILABLE });
+  if (todayOnly) rows = (rows || []).filter((t: any) => isToday(t.scheduledFor || t.dueAt || t.createdAt));
+  res.json(rows || []);
 });
 
 r.get("/tasks", authenticateToken, async (req: Request, res: Response) => {
   const user = (req as any).user!;
+  const todayOnly = String(req.query.todayOnly || "").toLowerCase() === "true";
+
   if (user.role === roleEnum.EMPLOYEE) {
-    const mine = await storage.getTasks({ assigneeId: user.id });
-    return res.json(mine);
+    let mine = await storage.getTasks({ assigneeId: user.id });
+    if (todayOnly) mine = (mine || []).filter((t: any) => isToday(t.scheduledFor || t.dueAt || t.createdAt));
+    return res.json(await attachCompletedNames(mine || []));
   }
+
   if (user.role === roleEnum.STORE_MANAGER) {
     if (!user.storeId) return res.status(400).json({ message: "Store assignment required" });
-    const rows = await storage.getTasks({ storeId: user.storeId });
-    return res.json(rows);
+    let rows = await storage.getTasks({ storeId: user.storeId });
+    if (todayOnly) rows = (rows || []).filter((t: any) => isToday(t.scheduledFor || t.dueAt || t.createdAt));
+    return res.json(await attachCompletedNames(rows || []));
   }
+
   const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
-  const rows = await storage.getTasks({ storeId });
-  return res.json(rows);
+  let rows = await storage.getTasks({ storeId });
+  if (todayOnly) rows = (rows || []).filter((t: any) => isToday(t.scheduledFor || t.dueAt || t.createdAt));
+  return res.json(await attachCompletedNames(rows || []));
 });
 
 r.post(
@@ -196,7 +266,6 @@ r.post(
       const task = await storage.getTask(id);
       if (!task) return res.status(404).json({ message: "Task not found" });
 
-      // ---- permissions
       if (user.role === roleEnum.EMPLOYEE && task.assigneeId && task.assigneeId !== user.id) {
         return res.status(403).json({ message: "Not your task" });
       }
@@ -204,9 +273,8 @@ r.post(
         return res.status(403).json({ message: "Forbidden" });
       }
 
-      // ---- enforce required max (if set)
-      const requiredMax = Number(task.photoCount ?? 0);     // required number for this task
-      const have = Number(task.photosUploaded ?? 0);        // already uploaded
+      const requiredMax = Number(task.photoCount ?? 0);
+      const have = Number(task.photosUploaded ?? 0);
       if (requiredMax > 0 && have >= requiredMax) {
         return res.status(400).json({ message: `Upload limit reached (${requiredMax}).` });
       }
@@ -217,7 +285,6 @@ r.post(
         return res.status(415).json({ message: "Only image files are allowed" });
       }
 
-      // ---- geofence: requireActiveCheckin stored a fence snapshot in req
       const active = (req as any).activeCheckin as
         | { fence?: { lat: number; lng: number; radiusM: number } }
         | undefined;
@@ -226,15 +293,6 @@ r.post(
       const point =
         Number.isFinite(lat) && Number.isFinite(lng) ? { lat: Number(lat), lng: Number(lng) } : undefined;
 
-      console.log("[PHOTO UPLOAD]", {
-        taskId: id,
-        userId: user.id,
-        have,
-        requiredMax,
-        fence,
-        point,
-      });
-
       if (fence) {
         const ok = point && withinFence(point, { lat: fence.lat, lng: fence.lng }, fence.radiusM);
         if (!ok) {
@@ -242,7 +300,6 @@ r.post(
         }
       }
 
-      // ---- store image as data:URL in DB
       const dataUrl = `data:${f.mimetype};base64,${f.buffer.toString("base64")}`;
 
       const inserted = await db
@@ -262,7 +319,6 @@ r.post(
         } as any)
         .returning({ id: taskPhotos.id });
 
-      // ---- increment counter, but never exceed max
       const newCount = requiredMax > 0 ? Math.min(have + 1, requiredMax) : have + 1;
       await storage.updateTask(id, { photosUploaded: newCount });
 
@@ -273,7 +329,6 @@ r.post(
     }
   }
 );
-
 
 r.post(
   "/tasks/:id/complete",
@@ -289,7 +344,6 @@ r.post(
 
       if (!canTouchTask(task, user)) return res.status(403).json({ message: "Forbidden" });
 
-      // Employees must satisfy photo requirement unless override flag used
       if (isEmployee(user)) {
         const need = Math.max(0, Number(task.photoCount ?? (task.photoRequired ? 1 : 0)));
         const have = Math.max(0, Number(task.photosUploaded ?? 0));
@@ -311,15 +365,6 @@ r.post(
       const within = fence
         ? point && withinFence(point, { lat: fence.lat, lng: fence.lng }, fence.radiusM)
         : true;
-
-      // 🔎 DEBUG
-      console.log("[COMPLETE geofence]", {
-        taskId: id,
-        userId: user.id,
-        point: point || null,
-        fence: fence || null,
-        withinFence: !!within,
-      });
 
       if (fence && !within) {
         return res.status(403).json({ message: "Completion must occur on store premises." });

@@ -10,7 +10,7 @@ export default function Logout() {
     let cancelled = false;
     (async () => {
       try {
-        await logout();
+        await logout(); // clears session/cookies/local state
       } catch {
         // ignore
       } finally {

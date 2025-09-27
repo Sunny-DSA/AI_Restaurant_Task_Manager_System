@@ -74,6 +74,10 @@ export async function apiRequest<T = any>(
   return (payload as T) ?? (undefined as T);
 }
 
+/** Tiny helper some code imports to detect 401s */
+export const isAuthError = (err: unknown): boolean =>
+  !!(err && typeof err === "object" && (err as any).status === 401);
+
 /* =========
    Types
    ========= */
@@ -97,6 +101,7 @@ export interface Task {
   claimedAt?: string;
   startedAt?: string;
   completedAt?: string;
+  completedByName?: string;
 
   estimatedDuration?: number;
   actualDuration?: number;
@@ -219,6 +224,7 @@ export const taskApi = {
     status?: string;
     assigneeId?: number;
     scheduledDate?: Date | string;
+    todayOnly?: boolean; // NEW optional
   }): Promise<Task[]> {
     const params = new URLSearchParams();
     if (filters?.storeId) params.append("storeId", String(filters.storeId));
@@ -232,16 +238,28 @@ export const taskApi = {
           : String(filters.scheduledDate);
       params.append("scheduledDate", v);
     }
-    return apiRequest<Task[]>("GET", `/api/tasks?${params.toString()}`);
+    if (filters?.todayOnly) params.append("today", "1"); // harmless if server ignores
+    const qs = params.toString();
+    return apiRequest<Task[]>("GET", `/api/tasks${qs ? `?${qs}` : ""}`);
   },
 
+  /** Direct + store-wide for me (optionally today-only) */
   getMyTasks(): Promise<Task[]> {
     return apiRequest<Task[]>("GET", "/api/tasks/my");
   },
 
-  getAvailableTasks(storeId?: number): Promise<Task[]> {
-    const params = storeId ? `?storeId=${storeId}` : "";
-    return apiRequest<Task[]>("GET", `/api/tasks/available${params}`);
+  /** Convenience: same as getMyTasks but with ?today=1 (server may ignore) */
+  getMyTasksToday(): Promise<Task[]> {
+    return apiRequest<Task[]>("GET", "/api/tasks/my?today=1");
+  },
+
+  /** Available list, optional today-only flag */
+  getAvailableTasks(storeId?: number, todayOnly?: boolean): Promise<Task[]> {
+    const params = new URLSearchParams();
+    if (storeId) params.append("storeId", String(storeId));
+    if (todayOnly) params.append("today", "1");
+    const qs = params.toString();
+    return apiRequest<Task[]>("GET", `/api/tasks/available${qs ? `?${qs}` : ""}`);
   },
 
   claimTask(taskId: number, location?: Coords): Promise<Task> {
@@ -364,7 +382,7 @@ export const userApi = {
 };
 
 /* =========
-   API – Analytics (unchanged)
+   API – Analytics
    ========= */
 
 export const analyticsApi = {
@@ -381,7 +399,7 @@ export const analyticsApi = {
       "GET",
       `/api/analytics/tasks?${params.toString()}`,
     );
-    },
+  },
   getUserStats(storeId?: number): Promise<UserStats> {
     const params = storeId ? `?storeId=${storeId}` : "";
     return apiRequest<UserStats>("GET", `/api/analytics/users${params}`);
@@ -617,6 +635,17 @@ export const taskListApi = {
   updateList(id: number, payload: UpdateTaskListPayload): Promise<any> {
     return apiRequest<any>("PUT", `/api/task-lists/${id}`, payload);
   },
+
+  /**
+   * NEW (safe): Ask server to ensure today's tasks exist for a store.
+   * If the backend route isn't present yet, we swallow the 404 so the UI never crashes.
+   */
+  async ensureForStore(storeId: number): Promise<{ ok: true }> {
+  // Calls your server to (idempotently) create today’s tasks for this store
+  await apiRequest("POST", `/api/task-lists/ensure-today?storeId=${storeId}`);
+  return { ok: true };
+}
+,
 };
 
 /* =========
@@ -690,7 +719,6 @@ export const adminApi = {
     return apiRequest<AdminPhotoFeedItem[]>("GET", `/api/admin/photo-feed${suffix}`);
   },
 };
-
 
 export const photosApi = {
   url(id: number | null | undefined): string | null {

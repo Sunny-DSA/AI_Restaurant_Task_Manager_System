@@ -174,8 +174,6 @@ r.post(
         photoCount: Number(b.photoCount ?? 0),
         priority: b.priority ?? "normal",
         isActive: true,
-        // If your storage layer supports a position field,
-        // you can also pass it here (optional).
       });
 
       res.status(201).json(row);
@@ -203,7 +201,6 @@ r.put(
       if ("photoRequired" in b) patch.photoRequired = !!b.photoRequired;
       if ("photoCount" in b) patch.photoCount = Number(b.photoCount ?? 0);
       if ("priority" in b) patch.priority = b.priority ?? "normal";
-      // If you add drag-sort later, support `position` as well:
       if ("position" in b) patch.position = Number(b.position);
 
       const updated = await storage.updateTaskTemplate(id, patch);
@@ -227,13 +224,11 @@ r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Resp
 
     const dateStr = new Date().toISOString().slice(0, 10);
 
-    // fetch templates to know which belong to this list
     const _allTemplates = await storage.getTaskTemplates();
     const templates = (_allTemplates || []).filter((t: any) => t.listId === listId && t.isActive !== false);
     const templatesOrdered = orderByCreation(templates);
     const templateIds = templatesOrdered.map((t: any) => t.id);
 
-    // fetch tasks and keep only today's tasks for those templates
     const allTasks = await storage.getTasks({ storeId: qStoreId });
     const byList = (allTasks || []).filter((t: any) => {
       if (!t.templateId || !templateIds.includes(t.templateId)) return false;
@@ -242,7 +237,6 @@ r.get("/task-lists/:id/tasks", authenticateToken, async (req: Request, res: Resp
       return dStr === dateStr;
     });
 
-    // Ensure tasks are returned in the same order as templates
     const orderMap = new Map<number, number>();
     templateIds.forEach((tid, idx) => orderMap.set(tid, idx));
     byList.sort((a: any, b: any) => {
@@ -331,4 +325,102 @@ r.post(
   }
 );
 
+/* -------- NEW: bulk ensure today's tasks for a store (idempotent) -------- */
+r.post("/task-lists/ensure-for-store", authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const me = (req as any).user!;
+    const q = req.query?.storeId;
+    const storeId = q != null ? Number(q) : me?.storeId;
+
+    if (!Number.isFinite(storeId)) {
+      return res.status(400).json({ message: "storeId required" });
+    }
+
+    // Managers can only ensure for their own store
+    const isAdmin = me.role === roleEnum.MASTER_ADMIN || me.role === roleEnum.ADMIN;
+    if (!isAdmin && me.role === roleEnum.STORE_MANAGER && me.storeId !== storeId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const { ensureTasksForStoreToday } = await import("../utils/ensureToday");
+    const result = await ensureTasksForStoreToday(storeId);
+
+    res.json({ success: true, ensured: result.ensured });
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || "Failed to ensure today's tasks" });
+  }
+});
+
+// Ensure all active templates across lists produce a task for *today* for a store
+r.post(
+  "/task-lists/ensure-today",
+  authenticateToken,
+  requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
+  async (req: Request, res: Response) => {
+    try {
+      const me = (req as any).user!;
+      const qStoreId = req.query.storeId ? Number(req.query.storeId) : me.storeId;
+      if (!qStoreId) return res.status(400).json({ message: "storeId required" });
+
+      // If a store manager calls this, they can only run it for their store
+      if (me.role === roleEnum.STORE_MANAGER && me.storeId && me.storeId !== qStoreId) {
+        return res.status(403).json({ message: "Forbidden for another store" });
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      // 1) Load active templates (across all lists) — adjust if you scope by store/list
+      const allTemplates = await storage.getTaskTemplates();
+      const activeTemplates = (allTemplates || []).filter((t: any) => t.isActive !== false);
+
+      // 2) Load today's existing tasks for this store
+      const allTasks = await storage.getTasks({ storeId: qStoreId });
+      const todaysByTemplate = new Map<number, any>();
+      for (const t of allTasks || []) {
+        if (!t.templateId || !t.scheduledFor) continue;
+        const d = new Date(t.scheduledFor).toISOString().slice(0, 10);
+        if (d === today) {
+          todaysByTemplate.set(Number(t.templateId), t);
+        }
+      }
+
+      // 3) Create missing ones
+      let created = 0;
+      for (const tpl of activeTemplates) {
+        const tplId = Number(tpl.id);
+        if (!tplId) continue;
+
+        // already exists today?
+        if (todaysByTemplate.has(tplId)) continue;
+
+        // Optional: respect recurrence on template/list if you store it
+        // (skipped here; always ensure daily)
+
+        await storage.createTask({
+          templateId: tplId,
+          title: tpl.title,
+          description: tpl.description ?? null,
+          storeId: qStoreId,
+          assigneeType: tpl.assigneeId ? "specific_employee" : "store_wide",
+          assigneeId: tpl.assigneeId ?? null,
+          status: taskStatusEnum.PENDING,
+          priority: tpl.priority ?? "medium",
+          photoRequired: !!tpl.photoRequired,
+          photoCount: tpl.photoCount ?? 1,
+          scheduledFor: new Date(), // today
+          notes: null,
+        });
+
+        created++;
+      }
+
+      res.json({ ok: true, created });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to ensure today's tasks" });
+    }
+  }
+);
+
+
 export default r;
+

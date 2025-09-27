@@ -1,7 +1,7 @@
-// client/src/pages/TasklistsRunpage.tsx
+// client/src/pages/TaskListRunPage.tsx
 import { useMemo, useRef, useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Camera, Check, Lock, Search as SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -90,7 +90,6 @@ export default function TaskListRunPage() {
 
   const { user } = useAuth();
   const { toast } = useToast();
-  const qc = useQueryClient();
 
   const isAdmin = user?.role === "master_admin" || user?.role === "admin";
   const isManager = user?.role === "store_manager";
@@ -111,6 +110,9 @@ export default function TaskListRunPage() {
 
   // session thumbnails (per taskId)
   const [sessionPhotos, setSessionPhotos] = useState<Record<number, string[]>>({});
+
+  // per-task uploading state
+  const [uploadingByTask, setUploadingByTask] = useState<Record<number, boolean>>({});
 
   // ensure today's run was primed
   const [runPrimed, setRunPrimed] = useState(false);
@@ -234,6 +236,20 @@ export default function TaskListRunPage() {
     totals.done === totals.total &&
     Object.values(state).every((t) => t.photos >= t.required);
 
+  // filter counts for the badge labels
+  const filterCounts = useMemo(() => {
+    let all = 0, needs = 0, incomplete = 0, completed = 0;
+    for (const it of templatesOrdered) {
+      const r = state[it.id] || { required: 0, photos: 0, checked: false };
+      const needsPhoto = (it.photoRequired ?? false) || (r.required ?? 0) > 0;
+      all += 1;
+      if (needsPhoto) needs += 1;
+      if (r.checked) completed += 1;
+      else incomplete += 1;
+    }
+    return { all, needs, incomplete, completed };
+  }, [templatesOrdered, state]);
+
   const getCoords = (): Promise<{ latitude?: number; longitude?: number }> =>
     new Promise((resolve) => {
       if (!navigator.geolocation) return resolve({});
@@ -321,10 +337,6 @@ export default function TaskListRunPage() {
 
   const uploadPhoto = useMutation({
     mutationFn: async (vars: { taskId: number; file: File }) => {
-      const entry = Object.values(state).find((v) => v.taskId === vars.taskId);
-      if (entry && entry.required > 0 && entry.photos >= entry.required) {
-        throw new Error(`Upload limit reached (${entry.required}).`);
-      }
       const ok = await ensureCheckedIn();
       if (!ok) throw new Error("Not checked in");
 
@@ -343,6 +355,7 @@ export default function TaskListRunPage() {
       return r.json() as Promise<{ photosUploaded?: number; required?: number }>;
     },
     onSuccess: (out, { taskId, file }) => {
+      // state counts
       setState((s) => {
         const n: Runtime = { ...s };
         for (const key of Object.keys(n)) {
@@ -352,11 +365,17 @@ export default function TaskListRunPage() {
             const have = Number(out?.photosUploaded ?? (t.photos ?? 0) + 1);
             t.required = req;
             t.photos = Math.min(req || Infinity, have);
+            // toast success per upload
+            toast({
+              title: "Photo uploaded",
+              description: `Progress ${t.photos}/${t.required}${t.required ? "" : ""}`,
+            });
           }
         }
         return n;
       });
 
+      // local thumbnail
       const url = URL.createObjectURL(file);
       setSessionPhotos((g) => ({ ...g, [taskId]: [...(g[taskId] || []), url] }));
       setRunPrimed(true);
@@ -431,28 +450,58 @@ export default function TaskListRunPage() {
   const openFile = (templateId: number) => fileInputs.current[templateId]?.click();
 
   const toggleCheck = async (templateId: number) => {
-    const t = state[templateId];
-    if (!t?.taskId) {
+    // read current snapshot
+    const rt0 = state[templateId];
+
+    // if photos required but not met, do nothing
+    const requires = Math.max(0, Number(rt0?.required ?? 0));
+    const have = Math.max(0, Number(rt0?.photos ?? 0));
+    if (requires > 0 && have < requires) return;
+
+    // ensure task exists and capture a fresh taskId locally
+    let taskId: number | undefined = rt0?.taskId;
+    if (!taskId) {
       try {
         const created = await ensureTask.mutateAsync({ templateId });
+        taskId = Number(created.id);
         setState((s) => ({
           ...s,
           [templateId]: {
-            ...(s[templateId] || { required: created.photoCount ?? 0, photos: 0, checked: false }),
-            taskId: created.id,
+            ...(s[templateId] || {
+              required: Number(created.photoCount ?? 0),
+              photos: Number(created.photosUploaded ?? 0),
+              checked: false,
+            }),
+            taskId,
           },
         }));
       } catch {
         return;
       }
     }
-    const cur = state[templateId];
-    if (cur.required > 0 && cur.photos < cur.required) return;
 
-    const ok = await ensureCheckedIn();
-    if (!ok) return;
+    // re-read latest runtime after possible state update
+    const rt = { ...(state[templateId] || {}), taskId } as {
+      required?: number; photos?: number; checked?: boolean; taskId?: number;
+    };
 
-    if (!cur.checked) completeTask.mutate(cur.taskId!);
+    // already completed? nothing to do
+    if (rt.checked) return;
+
+    // no-photo tasks: ask for a quick confirm the first time
+    if (requires === 0) {
+      const ok = window.confirm("Mark this item as completed? (No photos required)");
+      if (!ok) return;
+    }
+
+    // must be checked in
+    const okCI = await ensureCheckedIn();
+    if (!okCI) return;
+
+    // complete using the local taskId we just ensured
+    if (typeof taskId === "number" && Number.isFinite(taskId)) {
+      completeTask.mutate(taskId);
+    }
   };
 
   const confirmUploadFromPreview = async () => {
@@ -481,10 +530,13 @@ export default function TaskListRunPage() {
         ? { id: rt.taskId }
         : await ensureTask.mutateAsync({ templateId: preview.templateId });
 
+      setUploadingByTask((m) => ({ ...m, [Number(ensured.id)]: true }));
       await uploadPhoto.mutateAsync({ taskId: Number(ensured.id), file: preview.file });
     } finally {
       try { URL.revokeObjectURL(preview.url); } catch {}
       setPreview(null);
+      // clear uploading flag after a tick (in case of quick sequence)
+      setTimeout(() => setUploadingByTask({}), 0);
     }
   };
 
@@ -609,10 +661,10 @@ export default function TaskListRunPage() {
       <div className="mb-4 flex flex-wrap gap-2 items-end">
         <div className="flex gap-1">
           {[
-            { k: "all", label: "All" },
-            { k: "needs", label: "Needs Photo" },
-            { k: "incomplete", label: "Incomplete" },
-            { k: "completed", label: "Completed" },
+            { k: "all", label: `All (${filterCounts.all})` },
+            { k: "needs", label: `Needs Photo (${filterCounts.needs})` },
+            { k: "incomplete", label: `Incomplete (${filterCounts.incomplete})` },
+            { k: "completed", label: `Completed (${filterCounts.completed})` },
           ].map((b) => (
             <Button
               key={b.k}
@@ -685,6 +737,7 @@ export default function TaskListRunPage() {
 
                   const taskId = r.taskId;
                   const thumbs = taskId ? sessionPhotos[taskId] || [] : [];
+                  const isUploading = taskId ? !!uploadingByTask[taskId] : false;
 
                   return (
                     <div key={it.id} className="flex items-start justify-between gap-3 rounded-md border p-3">
@@ -776,16 +829,27 @@ export default function TaskListRunPage() {
                               }
                             }
 
-                            // Upload sequentially, respecting remaining cap
-                            for (const f of files) {
-                              const cur = state[it.id] || { required: 0, photos: 0 };
-                              const remaining = Math.max(0, (cur.required ?? 0) - (cur.photos ?? 0));
-                              if ((cur.required ?? 0) > 0 && remaining <= 0) break;
-                              await uploadPhoto.mutateAsync({ taskId: Number(rt!.taskId), file: f });
-                            }
+                            // mark uploading for this task
+                            setUploadingByTask((m) => ({ ...m, [Number(rt!.taskId)]: true }));
 
-                            // SAFE CLEAR: use stored element (not e.currentTarget after awaits)
-                            inputEl.value = "";
+                            // Upload sequentially, respecting remaining cap
+                            try {
+                              for (const f of files) {
+                                const cur = state[it.id] || { required: 0, photos: 0 };
+                                const remaining = Math.max(0, (cur.required ?? 0) - (cur.photos ?? 0));
+                                if ((cur.required ?? 0) > 0 && remaining <= 0) break;
+                                await uploadPhoto.mutateAsync({ taskId: Number(rt!.taskId), file: f });
+                              }
+                            } finally {
+                              // unset uploading for this task
+                              setUploadingByTask((m) => {
+                                const copy = { ...m };
+                                delete copy[Number(rt!.taskId)];
+                                return copy;
+                              });
+                              // SAFE CLEAR: use stored element (not e.currentTarget after awaits)
+                              inputEl.value = "";
+                            }
                           }}
                         />
                         <Button
@@ -806,11 +870,11 @@ export default function TaskListRunPage() {
                             }
                             openFile(it.id);
                           }}
-                          disabled={uploadPhoto.isPending || ensureTask.isPending || (isAdmin && !selectedStoreId) || isFull}
+                          disabled={uploadPhoto.isPending || ensureTask.isPending || (isAdmin && !selectedStoreId) || isFull || isUploading}
                           title={isFull ? "Upload limit reached" : "Add photo(s)"}
                         >
                           <Camera className="w-4 h-4 mr-2" />
-                          Add Photo
+                          {isUploading ? "Uploading…" : "Add Photo"}
                         </Button>
                       </div>
                     </div>

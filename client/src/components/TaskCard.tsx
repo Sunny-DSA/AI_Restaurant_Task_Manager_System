@@ -1,4 +1,5 @@
-import { useState } from "react";
+// client/src/components/TaskCard.tsx
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { taskApi, userApi, Task, User } from "@/lib/api";
@@ -10,7 +11,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Clock, User as UserIcon, Camera, UserCheck, ArrowRightLeft, CheckCircle } from "lucide-react";
+import {
+  Clock,
+  User as UserIcon,
+  Camera,
+  UserCheck,
+  ArrowRightLeft,
+  CheckCircle,
+} from "lucide-react";
 import TaskDetailsDialog from "./TaskDetailsDialog";
 
 interface TaskCardProps {
@@ -23,11 +31,13 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [transferUserId, setTransferUserId] = useState<string>("");
   const [transferReason, setTransferReason] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Cache store users for assignee labels
+  /* ---------- data ---------- */
   const { data: storeUsers = [] } = useQuery<User[]>({
     queryKey: ["users", user?.storeId],
     queryFn: () => userApi.getUsers(user?.storeId),
@@ -36,11 +46,82 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
   });
 
   const refresh = () => {
+    // refresh both stacks we commonly show on dashboard
+    queryClient.invalidateQueries({ queryKey: ["/api/tasks/my"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/tasks/available"] });
     queryClient.invalidateQueries({ queryKey: ["tasks", user?.storeId] });
     queryClient.invalidateQueries({ queryKey: ["availableTasks", user?.storeId] });
     onTaskUpdate?.();
   };
 
+  /* ---------- helpers ---------- */
+  const requiredPhotos = Math.max(0, Number(task.photoCount ?? (task.photoRequired ? 1 : 0)));
+  const uploadedPhotos = Math.max(0, Number(task.photosUploaded ?? 0));
+  const photosLeft = Math.max(0, requiredPhotos - uploadedPhotos);
+
+  const canClaimTask = () =>
+    (task.status === "available" ||
+      (task.status === "pending" && task.assigneeType === "store_wide")) &&
+    hasPermission(user?.role || "", "complete", "tasks");
+
+  const canTransferTask = () => task.claimedBy === user?.id && task.status !== "completed";
+
+  // 🔒 Guard completion unless photos requirement is met (mirrors backend)
+  const canCompleteTask = () => {
+    const statusOk = task.status !== "completed";
+    const photosOk = !task.photoRequired || uploadedPhotos >= requiredPhotos;
+    return statusOk && photosOk && task.claimedBy === user?.id;
+  };
+
+  const formatDuration = (minutes?: number) => {
+    if (!minutes) return "N/A";
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const assigneeLabel = (() => {
+    if (task.assigneeType === "specific_employee" && task.assigneeId) {
+      const found = storeUsers.find((u) => u.id === task.assigneeId);
+      if (found)
+        return `${found.firstName || ""} ${found.lastName || ""}`.trim() ||
+          found.email ||
+          `User #${found.id}`;
+      return `User #${task.assigneeId}`;
+    }
+    if (task.assigneeType === "manager") return "Store managers";
+    return "Anyone at the store";
+  })();
+
+  const getTaskStatusColor = () => {
+    switch (task.status) {
+      case "completed":
+        return "bg-success-100 text-success-700";
+      case "in_progress":
+      case "claimed":
+        return "bg-warning-100 text-warning-700";
+      case "overdue":
+        return "bg-destructive-100 text-destructive-700";
+      case "available":
+        return "bg-primary-100 text-primary-700";
+      default:
+        return "bg-gray-100 text-gray-700";
+    }
+  };
+
+  const getPriorityColor = () => {
+    switch (task.priority) {
+      case "high":
+        return "bg-destructive-100 text-destructive-700";
+      case "normal":
+        return "bg-primary-100 text-primary-700";
+      case "low":
+      default:
+        return "bg-gray-100 text-gray-700";
+    }
+  };
+
+  /* ---------- mutations ---------- */
   const claimTaskMutation = useMutation({
     mutationFn: (location?: { latitude: number; longitude: number }) =>
       taskApi.claimTask(task.id, location),
@@ -78,10 +159,26 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
     },
   });
 
+  const uploadPhotoMutation = useMutation({
+    mutationFn: (file: File) => taskApi.uploadPhoto(task.id, file),
+    onSuccess: () => {
+      toast({ title: "Photo uploaded" });
+      refresh();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  /* ---------- handlers ---------- */
   const handleClaimTask = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => claimTaskMutation.mutate({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        (pos) =>
+          claimTaskMutation.mutate({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          }),
         () =>
           toast({
             title: "Location required",
@@ -96,79 +193,30 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
 
   const handleTransferTask = () => {
     if (!transferUserId) {
-      toast({ title: "Select a user", description: "Pick a team member to transfer to", variant: "destructive" });
+      toast({
+        title: "Select a user",
+        description: "Pick a team member to transfer to",
+        variant: "destructive",
+      });
       return;
     }
     transferTaskMutation.mutate();
   };
 
-  const getTaskStatusColor = () => {
-    switch (task.status) {
-      case "completed":
-        return "bg-success-100 text-success-700";
-      case "in_progress":
-      case "claimed":
-        return "bg-warning-100 text-warning-700";
-      case "overdue":
-        return "bg-destructive-100 text-destructive-700";
-      case "available":
-        return "bg-primary-100 text-primary-700";
-      default:
-        return "bg-gray-100 text-gray-700";
-    }
-  };
-
-  const getPriorityColor = () => {
-    switch (task.priority) {
-      case "high":
-        return "bg-destructive-100 text-destructive-700";
-      case "normal":
-        return "bg-primary-100 text-primary-700";
-      case "low":
-      default:
-        return "bg-gray-100 text-gray-700";
-    }
-  };
-
-  const formatDuration = (minutes?: number) => {
-    if (!minutes) return "N/A";
-    const h = Math.floor(minutes / 60);
-    const m = minutes % 60;
-    return h > 0 ? `${h}h ${m}m` : `${m}m`;
-  };
-
-  const canClaimTask = () =>
-    (task.status === "available" || (task.status === "pending" && task.assigneeType === "store_wide")) &&
-    hasPermission(user?.role || "", "complete", "tasks");
-
-  const canTransferTask = () => task.claimedBy === user?.id && task.status !== "completed";
-  const canCompleteTask = () => task.claimedBy === user?.id && task.status !== "completed";
-  const isMyTask = task.claimedBy === user?.id || task.assigneeId === user?.id;
-
-  const assigneeLabel = (() => {
-    if (task.assigneeType === "specific_employee" && task.assigneeId) {
-      const found = storeUsers.find((u) => u.id === task.assigneeId);
-      if (found)
-        return `${found.firstName || ""} ${found.lastName || ""}`.trim() || found.email || `User #${found.id}`;
-      return `User #${task.assigneeId}`;
-    }
-    if (task.assigneeType === "manager") return "Store managers";
-    return "Anyone at the store";
-  })();
-
+  /* ---------- render ---------- */
   return (
     <>
       <div
         className={`task-card bg-white rounded-xl shadow-sm border border-gray-100 p-6 transition-all hover:shadow-md ${
           task.status === "completed" ? "opacity-75" : ""
-        } ${task.status === "claimed" && isMyTask ? "task-claimed" : ""} ${
+        } ${task.status === "claimed" && (task.claimedBy === user?.id) ? "task-claimed" : ""} ${
           task.status === "completed" ? "task-completed" : ""
         } ${task.status === "overdue" ? "task-overdue" : ""}`}
       >
         <div className="flex items-start justify-between">
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center flex-wrap gap-2 mb-3">
-              <h3 className="text-lg font-semibold text-gray-900">{task.title}</h3>
+              <h3 className="text-lg font-semibold text-gray-900 truncate">{task.title}</h3>
               <Badge className={getTaskStatusColor()}>{task.status.replace("_", " ")}</Badge>
               {task.priority !== "normal" && (
                 <Badge className={getPriorityColor()}>{task.priority} priority</Badge>
@@ -183,7 +231,10 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
                   <Clock className="w-4 h-4 mr-2" />
                   <span>
                     Due:{" "}
-                    {new Date(task.dueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {new Date(task.dueAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </span>
                 </div>
               )}
@@ -197,7 +248,7 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
                 <div className="flex items-center text-gray-600">
                   <Camera className="w-4 h-4 mr-2" />
                   <span>
-                    {task.photosUploaded}/{task.photoCount} photos
+                    {uploadedPhotos}/{requiredPhotos} photos
                   </span>
                 </div>
               )}
@@ -210,13 +261,27 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
               )}
             </div>
 
+            {/* subtle progress if photos are required */}
+            {task.photoRequired && requiredPhotos > 0 && (
+              <div className="h-1.5 bg-gray-100 rounded overflow-hidden">
+                <div
+                  className={`h-full ${uploadedPhotos >= requiredPhotos ? "bg-emerald-600" : "bg-primary-500"}`}
+                  style={{
+                    width: `${Math.min(100, (uploadedPhotos / Math.max(1, requiredPhotos)) * 100)}%`,
+                  }}
+                />
+              </div>
+            )}
+
             {(task.claimedBy || task.completedBy) && (
-              <div className="mb-4">
+              <div className="mt-4">
                 {task.claimedBy && task.status !== "completed" && (
                   <div className="flex items-center text-sm text-warning-600 bg-warning-50 px-3 py-2 rounded-lg">
                     <UserCheck className="w-4 h-4 mr-2" />
                     <span>
-                      {task.claimedBy === user?.id ? "You are working on this task" : "Task claimed by team member"}
+                      {task.claimedBy === user?.id
+                        ? "You are working on this task"
+                        : "Task claimed by team member"}
                     </span>
                   </div>
                 )}
@@ -235,7 +300,7 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
             )}
           </div>
 
-          <div className="ml-6 flex flex-col space-y-2">
+          <div className="ml-6 flex flex-col space-y-2 shrink-0">
             {canClaimTask() && (
               <Button
                 onClick={handleClaimTask}
@@ -246,13 +311,53 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
               </Button>
             )}
 
-            {canCompleteTask() && (
+            {/* Add Photo (enabled while photos are still allowed) */}
+            {task.photoRequired && (
+              <>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    uploadPhotoMutation.mutate(f);
+                    e.currentTarget.value = "";
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploadPhotoMutation.isPending || (requiredPhotos > 0 && uploadedPhotos >= requiredPhotos)}
+                >
+                  <Camera className="w-4 h-4 mr-2" />
+                  {uploadPhotoMutation.isPending ? "Uploading..." : "Add Photo"}
+                </Button>
+              </>
+            )}
+
+            {canCompleteTask() ? (
               <Button
                 onClick={() => completeTaskMutation.mutate()}
                 disabled={completeTaskMutation.isPending}
                 className="bg-success-600 text-white hover:bg-success-700"
               >
                 {completeTaskMutation.isPending ? "Completing..." : "Complete"}
+              </Button>
+            ) : (
+              // Helpful disabled button state if photos required
+              <Button
+                disabled
+                className="bg-success-600/50 text-white"
+                title={
+                  task.photoRequired && uploadedPhotos < requiredPhotos
+                    ? `Upload ${requiredPhotos - uploadedPhotos} more photo(s) to complete`
+                    : "You need to claim/start this task first"
+                }
+              >
+                Complete
               </Button>
             )}
 
@@ -306,7 +411,9 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Reason (optional):</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Reason (optional):
+              </label>
               <Textarea
                 value={transferReason}
                 onChange={(e) => setTransferReason(e.target.value)}
@@ -316,7 +423,11 @@ export default function TaskCard({ task, onTaskUpdate }: TaskCardProps) {
             </div>
 
             <div className="flex space-x-3">
-              <Button onClick={handleTransferTask} disabled={transferTaskMutation.isPending || !transferUserId} className="flex-1">
+              <Button
+                onClick={handleTransferTask}
+                disabled={transferTaskMutation.isPending || !transferUserId}
+                className="flex-1"
+              >
                 {transferTaskMutation.isPending ? "Transferring..." : "Transfer Task"}
               </Button>
               <Button variant="outline" onClick={() => setShowTransferModal(false)} className="flex-1">

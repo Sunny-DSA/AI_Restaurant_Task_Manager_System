@@ -1,315 +1,546 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import AdminDashboard from "./AdminDashboard";
+import EmployeeDashboard from "./EmployeeDashboard";
 import { useAuth } from "@/hooks/useAuth";
-import { taskApi, analyticsApi } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import TaskCard from "@/components/TaskCard";
-import QRScanner from "@/components/QRScanner";
-import { CheckSquare, Clock, Users, AlertTriangle, QrCode, Plus, UserPlus, Download } from "lucide-react";
 
 export default function Dashboard() {
-  const { user, checkIn } = useAuth();
-  const [showQRScanner, setShowQRScanner] = useState(false);
+  const { user } = useAuth();
+  if (!user) return null;
 
-  // Get task stats
-  const { data: taskStats } = useQuery({
-    queryKey: ["/api/analytics/tasks", user?.storeId],
-    queryFn: () => analyticsApi.getTaskStats(user?.storeId),
-    enabled: !!user?.storeId,
-  });
-
-  // Get user stats
-  const { data: userStats } = useQuery({
-    queryKey: ["/api/analytics/users", user?.storeId],
-    queryFn: () => analyticsApi.getUserStats(user?.storeId),
-    enabled: !!user?.storeId,
-  });
-
-  // Get priority tasks
-  const { data: priorityTasks = [] } = useQuery({
-    queryKey: ["/api/tasks/my"],
-    queryFn: () => taskApi.getMyTasks(),
-  });
-
-  // Get available tasks for claiming
-  const { data: availableTasks = [] } = useQuery({
-    queryKey: ["/api/tasks/available"],
-    queryFn: () => taskApi.getAvailableTasks(),
-    enabled: !!user?.storeId,
-  });
-
-  const handleQRSuccess = (storeId: number, storeName: string) => {
-    // Get current location for check-in
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          checkIn({
-            storeId,
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          });
-        },
-        () => {
-          checkIn({ storeId });
-        }
-      );
-    } else {
-      checkIn({ storeId });
-    }
-  };
-
-  const todaysTasks = priorityTasks.filter(task => {
-    const today = new Date().toDateString();
-    const taskDate = task.dueAt ? new Date(task.dueAt).toDateString() : today;
-    return taskDate === today;
-  });
-
-  const completedToday = todaysTasks.filter(task => task.status === "completed").length;
-  const overdueCount = priorityTasks.filter(task => task.status === "overdue").length;
-
-  return (
-    <div className="p-4 md:p-6 space-y-6">
-      {/* Quick Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Tasks Today</p>
-                <p className="text-2xl font-bold text-gray-900">{todaysTasks.length}</p>
-              </div>
-              <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center">
-                <CheckSquare className="w-6 h-6 text-primary-600" />
-              </div>
-            </div>
-            <div className="mt-2 flex items-center text-sm">
-              <span className="text-success-600 font-medium">{completedToday} completed</span>
-              <span className="text-gray-500 ml-1">• {todaysTasks.length - completedToday} pending</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Completion Rate</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {taskStats ? Math.round(taskStats.completionRate) : 0}%
-                </p>
-              </div>
-              <div className="w-12 h-12 bg-success-100 rounded-lg flex items-center justify-center">
-                <CheckSquare className="w-6 h-6 text-success-600" />
-              </div>
-            </div>
-            <div className="mt-2">
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div 
-                  className="bg-success-500 h-2 rounded-full" 
-                  style={{ width: `${taskStats ? taskStats.completionRate : 0}%` }}
-                ></div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Active Staff</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {userStats?.checkedInUsers || 0}
-                </p>
-              </div>
-              <div className="w-12 h-12 bg-warning-100 rounded-lg flex items-center justify-center">
-                <Users className="w-6 h-6 text-warning-600" />
-              </div>
-            </div>
-            <div className="mt-2 text-sm text-gray-500">
-              Currently checked in
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Overdue</p>
-                <p className="text-2xl font-bold text-destructive">{overdueCount}</p>
-              </div>
-              <div className="w-12 h-12 bg-destructive-100 rounded-lg flex items-center justify-center">
-                <AlertTriangle className="w-6 h-6 text-destructive" />
-              </div>
-            </div>
-            <div className="mt-2 text-sm text-destructive font-medium">
-              {overdueCount > 0 ? "Needs attention" : "All caught up"}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="grid md:grid-cols-2 gap-6">
-        {/* Priority Tasks */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Priority Tasks</CardTitle>
-              <Button variant="ghost" size="sm">
-                View All
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {priorityTasks.slice(0, 3).length > 0 ? (
-              priorityTasks.slice(0, 3).map((task) => (
-                <div key={task.id} className="p-4 border rounded-lg">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <h4 className="font-medium text-gray-900 mb-1">{task.title}</h4>
-                      <p className="text-sm text-gray-600 mb-2 line-clamp-2">{task.description}</p>
-                      <div className="flex items-center space-x-4 text-xs">
-                        <span className={`flex items-center ${
-                          task.status === "overdue" 
-                            ? "text-destructive" 
-                            : task.status === "claimed" || task.status === "in_progress"
-                            ? "text-warning-600"
-                            : "text-primary-600"
-                        }`}>
-                          <Clock className="w-3 h-3 mr-1" />
-                          {task.status === "overdue" 
-                            ? "Overdue" 
-                            : task.dueAt 
-                            ? `Due ${new Date(task.dueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-                            : "No due date"
-                          }
-                        </span>
-                        {task.photoRequired && (
-                          <span className="flex items-center text-gray-500">
-                            <QrCode className="w-3 h-3 mr-1" />
-                            Photo required
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="ml-3">
-                      {task.status === "available" && (
-                        <div className="px-2 py-1 bg-primary-100 text-primary-700 text-xs font-medium rounded-full">
-                          Available
-                        </div>
-                      )}
-                      {task.status === "claimed" && (
-                        <div className="px-2 py-1 bg-warning-100 text-warning-700 text-xs font-medium rounded-full">
-                          Claimed
-                        </div>
-                      )}
-                      {task.status === "completed" && (
-                        <div className="px-2 py-1 bg-success-100 text-success-700 text-xs font-medium rounded-full">
-                          Complete
-                        </div>
-                      )}
-                      {task.status === "overdue" && (
-                        <div className="px-2 py-1 bg-destructive-100 text-destructive-700 text-xs font-medium rounded-full">
-                          Overdue
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-8">
-                <CheckSquare className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                <p className="text-gray-500">No priority tasks at the moment</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Quick Actions */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Button
-              onClick={() => setShowQRScanner(true)}
-              className="w-full flex items-center justify-start p-4 h-auto border-2 border-dashed border-primary-200 bg-transparent hover:border-primary-300 hover:bg-primary-50 text-left"
-            >
-              <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center mr-4">
-                <QrCode className="w-6 h-6 text-primary-600" />
-              </div>
-              <div>
-                <h4 className="font-medium text-gray-900">Scan QR to Check In</h4>
-                <p className="text-sm text-gray-600">Start your shift and view assigned tasks</p>
-              </div>
-            </Button>
-
-            <Button
-              variant="outline"
-              className="w-full flex items-center justify-start p-4 h-auto"
-            >
-              <div className="w-12 h-12 bg-success-100 rounded-lg flex items-center justify-center mr-4">
-                <Plus className="w-6 h-6 text-success-600" />
-              </div>
-              <div className="text-left">
-                <h4 className="font-medium text-gray-900">Create New Task</h4>
-                <p className="text-sm text-gray-600">Add a custom task or checklist</p>
-              </div>
-            </Button>
-
-            <Button
-              variant="outline"
-              className="w-full flex items-center justify-start p-4 h-auto"
-            >
-              <div className="w-12 h-12 bg-warning-100 rounded-lg flex items-center justify-center mr-4">
-                <UserPlus className="w-6 h-6 text-warning-600" />
-              </div>
-              <div className="text-left">
-                <h4 className="font-medium text-gray-900">Invite Team Member</h4>
-                <p className="text-sm text-gray-600">Send invitation to new staff</p>
-              </div>
-            </Button>
-
-            <Button
-              variant="outline"
-              className="w-full flex items-center justify-start p-4 h-auto"
-            >
-              <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mr-4">
-                <Download className="w-6 h-6 text-gray-600" />
-              </div>
-              <div className="text-left">
-                <h4 className="font-medium text-gray-900">Export Report</h4>
-                <p className="text-sm text-gray-600">Download task completion data</p>
-              </div>
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Available Tasks Section */}
-      {availableTasks.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Available Tasks to Claim</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {availableTasks.slice(0, 2).map((task) => (
-              <TaskCard key={task.id} task={task} />
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* QR Scanner Modal */}
-      <QRScanner
-        isOpen={showQRScanner}
-        onClose={() => setShowQRScanner(false)}
-        onSuccess={handleQRSuccess}
-      />
-    </div>
-  );
+  const role = String(user.role || "").toLowerCase();
+  const isAdmin = role === "admin" || role === "master_admin";
+  // Store managers share the employee view
+  // (They’ll still see store-wide tasks via /tasks/my).
+  return isAdmin ? <AdminDashboard /> : <EmployeeDashboard />;
 }
+
+
+
+// import { useEffect, useMemo, useState } from "react";
+// import { Link } from "wouter";
+// import { useQuery } from "@tanstack/react-query";
+// import { useAuth } from "@/hooks/useAuth";
+// import { storeApi, taskApi, analyticsApi, Store, Task } from "@/lib/api";
+// import { hasPermission } from "@/lib/auth";
+// import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+// import { Button } from "@/components/ui/button";
+// import {
+//   Select,
+//   SelectContent,
+//   SelectItem,
+//   SelectTrigger,
+//   SelectValue,
+// } from "@/components/ui/select";
+// import TaskCard from "@/components/TaskCard";
+// import QRScanner from "@/components/QRScanner";
+// import {
+//   Store as StoreIcon,
+//   Users,
+//   BarChart3,
+//   CheckCircle2,
+//   Clock3,
+//   AlertTriangle,
+//   ChevronRight,
+//   Plus,
+//   Settings,
+//   QrCode,
+// } from "lucide-react";
+
+// /* ---------------- utilities ---------------- */
+// const pct = (v?: number) => (Number.isFinite(v) ? Math.round(v!) : 0);
+// const cls = (...xs: Array<string | false | null | undefined>) => xs.filter(Boolean).join(" ");
+
+// /* small inline skeleton (no dependency on a Skeleton component) */
+// function LineSkeleton({ className = "" }: { className?: string }) {
+//   return <div className={cls("animate-pulse bg-muted rounded", className)} />;
+// }
+
+// export default function Dashboard() {
+//   const { user } = useAuth();
+//   const isAdmin = user?.role === "master_admin" || user?.role === "admin";
+
+//   /* ---------------- stores & selection ---------------- */
+//   const { data: stores = [], isLoading: storesLoading } = useQuery({
+//     queryKey: ["/api/stores"],
+//     queryFn: storeApi.getStores,
+//   });
+
+//   // Default store choice
+//   const defaultStoreId = useMemo(() => {
+//     if (user?.storeId) return user.storeId;
+//     if (stores.length) return stores[0].id;
+//     return undefined;
+//   }, [user?.storeId, stores]);
+
+//   const [storeId, setStoreId] = useState<number | undefined>(defaultStoreId);
+
+//   useEffect(() => {
+//     setStoreId(defaultStoreId);
+//   }, [defaultStoreId]);
+
+//   const activeStore: Store | undefined =
+//     (storeId && stores.find((s) => s.id === storeId)) || stores[0];
+
+//   /* ---------------- analytics ---------------- */
+//   const { data: taskStats, isLoading: statsLoading } = useQuery({
+//     queryKey: ["/api/analytics/tasks", storeId],
+//     queryFn: () => analyticsApi.getTaskStats(storeId),
+//     enabled: !!storeId,
+//     retry: 0,
+//   });
+
+//   const { data: userStats } = useQuery({
+//     queryKey: ["/api/analytics/users", storeId],
+//     queryFn: () => analyticsApi.getUserStats(storeId),
+//     enabled: !!storeId,
+//     retry: 0,
+//   });
+
+//   /* ---------------- tasks ---------------- */
+//   // Admins see recent tasks for the selected store
+//   const { data: recentTasks = [], isLoading: tasksLoading } = useQuery({
+//     queryKey: ["/api/tasks", { storeId }],
+//     queryFn: () => taskApi.getTasks({ storeId }),
+//     enabled: !!storeId,
+//     select: (all) =>
+//       (all ?? [])
+//         .slice()
+//         .sort(
+//           (a: Task, b: Task) =>
+//             new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+//         )
+//         .slice(0, 6),
+//   });
+
+//   // Staff view: my tasks today + available tasks
+//   const { data: myTasks = [] } = useQuery({
+//     queryKey: ["/api/tasks/my"],
+//     queryFn: () => taskApi.getMyTasks(),
+//     enabled: !isAdmin,
+//   });
+
+//   const { data: availableTasks = [] } = useQuery({
+//     queryKey: ["/api/tasks/available", storeId],
+//     queryFn: () => taskApi.getAvailableTasks(storeId),
+//     enabled: !!storeId && !isAdmin,
+//   });
+
+//   const todayStr = new Date().toDateString();
+//   const myToday = myTasks.filter((t) => {
+//     const d = t.dueAt ? new Date(t.dueAt).toDateString() : todayStr;
+//     return d === todayStr;
+//   });
+//   const myCompletedToday = myToday.filter((t) => t.status === "completed").length;
+
+//   const loading = storesLoading || statsLoading || tasksLoading;
+
+//   /* ---------------- render ---------------- */
+//   return (
+//     <div className="p-4 md:p-6 space-y-6">
+//       {/* header row with store filter & quick admin actions */}
+//       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+//         <div>
+//           <h2 className="text-2xl font-bold">
+//             Welcome back{user?.firstName ? `, ${user.firstName}` : ""}!
+//           </h2>
+//           <p className="text-muted-foreground">
+//             {isAdmin ? "System overview and analytics" : "Your day at a glance"}
+//           </p>
+//         </div>
+
+//         <div className="flex items-center gap-2">
+//           {/* Store selector – enabled mostly for admins */}
+//           <Select
+//             value={storeId ? String(storeId) : ""}
+//             onValueChange={(v) => setStoreId(Number(v))}
+//             disabled={!isAdmin || stores.length <= 1}
+//           >
+//             <SelectTrigger className="w-[240px]">
+//               <SelectValue
+//                 placeholder={storesLoading ? "Loading stores..." : "Select a store"}
+//               />
+//             </SelectTrigger>
+//             <SelectContent>
+//               {stores.map((s) => (
+//                 <SelectItem key={s.id} value={String(s.id)}>
+//                   {s.name}
+//                 </SelectItem>
+//               ))}
+//             </SelectContent>
+//           </Select>
+
+//           {isAdmin && (
+//             <>
+//               <Link href="/stores">
+//                 <Button variant="outline" className="hidden md:inline-flex">
+//                   <StoreIcon className="w-4 h-4 mr-2" />
+//                   Manage Stores
+//                 </Button>
+//               </Link>
+//               <Link href="/users">
+//                 <Button variant="outline" className="hidden md:inline-flex">
+//                   <Users className="w-4 h-4 mr-2" />
+//                   User Management
+//                 </Button>
+//               </Link>
+//               <Link href="/reports">
+//                 <Button variant="outline" className="hidden md:inline-flex">
+//                   <BarChart3 className="w-4 h-4 mr-2" />
+//                   System Analytics
+//                 </Button>
+//               </Link>
+//             </>
+//           )}
+//         </div>
+//       </div>
+
+//       {/* KPI cards – role-aware content */}
+//       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+//         {isAdmin ? (
+//           <>
+//             <KpiCard
+//               title="Completed Tasks"
+//               value={taskStats?.completedTasks ?? 0}
+//               icon={CheckCircle2}
+//               tone="success"
+//               loading={loading}
+//             />
+//             <KpiCard
+//               title="Pending Tasks"
+//               value={(taskStats?.totalTasks ?? 0) - (taskStats?.completedTasks ?? 0)}
+//               icon={Clock3}
+//               tone="info"
+//               loading={loading}
+//             />
+//             <KpiCard
+//               title="Overdue Tasks"
+//               value={taskStats?.overdueTasks ?? 0}
+//               icon={AlertTriangle}
+//               tone="warn"
+//               loading={loading}
+//             />
+//             <KpiCard
+//               title="Completion Rate"
+//               value={`${pct(taskStats?.completionRate)}%`}
+//               icon={BarChart3}
+//               tone="primary"
+//               loading={loading}
+//             />
+//           </>
+//         ) : (
+//           <>
+//             <KpiCard
+//               title="My Tasks Today"
+//               value={myToday.length}
+//               icon={CheckCircle2}
+//               tone="primary"
+//               loading={storesLoading}
+//               sub={`${myCompletedToday} completed · ${Math.max(0, myToday.length - myCompletedToday)} pending`}
+//             />
+//             <KpiCard
+//               title="Available to Claim"
+//               value={availableTasks.length}
+//               icon={Users}
+//               tone="info"
+//               loading={storesLoading}
+//               sub="Tasks open for pickup"
+//             />
+//             <KpiCard
+//               title="Overdue (Mine)"
+//               value={myTasks.filter((t) => t.status === "overdue").length}
+//               icon={AlertTriangle}
+//               tone="warn"
+//               loading={storesLoading}
+//             />
+//             <KpiCard
+//               title="Active Staff"
+//               value={userStats?.checkedInUsers ?? 0}
+//               icon={Users}
+//               tone="success"
+//               loading={statsLoading}
+//               sub="Currently checked in"
+//             />
+//           </>
+//         )}
+//       </div>
+
+//       {/* Main grid: recent tasks + quick actions (admin) OR my day + quick actions (staff) */}
+//       <div className="grid gap-6 lg:grid-cols-3">
+//         <Card className="lg:col-span-2">
+//           <CardHeader className="flex-row items-center justify-between">
+//             <CardTitle>{isAdmin ? "Recent Tasks" : "My Tasks Today"}</CardTitle>
+//             <Link href={isAdmin ? "/tasks" : "/tasks"}>
+//               <Button variant="ghost" size="sm" className="text-primary">
+//                 View All <ChevronRight className="w-4 h-4 ml-1" />
+//               </Button>
+//             </Link>
+//           </CardHeader>
+//           <CardContent>
+//             {isAdmin ? (
+//               loading ? (
+//                 <div className="space-y-3">
+//                   {Array.from({ length: 5 }).map((_, i) => (
+//                     <LineSkeleton key={i} className="h-12 w-full" />
+//                   ))}
+//                 </div>
+//               ) : recentTasks.length === 0 ? (
+//                 <EmptyState
+//                   title="No recent activity"
+//                   desc={
+//                     activeStore
+//                       ? `There’s no recent activity for ${activeStore.name} yet.`
+//                       : "Nothing to show."
+//                   }
+//                   action={
+//                     <Link href="/task-lists">
+//                       <Button>
+//                         <Plus className="w-4 h-4 mr-2" />
+//                         Create Task List
+//                       </Button>
+//                     </Link>
+//                   }
+//                 />
+//               ) : (
+//                 <div className="space-y-2">
+//                   {recentTasks.map((t) => (
+//                     <div
+//                       key={t.id}
+//                       className="flex items-center justify-between p-3 rounded-md border hover:bg-muted/50"
+//                     >
+//                       <div className="min-w-0">
+//                         <div className="flex items-center gap-2">
+//                           <span className="font-medium truncate">{t.title}</span>
+//                           <span
+//                             className={cls(
+//                               "text-xs px-2 py-0.5 rounded-full border",
+//                               t.priority === "high" && "border-destructive text-destructive",
+//                               t.priority === "medium" && "border-amber-500 text-amber-600",
+//                               (!t.priority || t.priority === "low") &&
+//                                 "border-muted-foreground/30 text-muted-foreground",
+//                             )}
+//                           >
+//                             {String(t.priority || "normal").toUpperCase()}
+//                           </span>
+//                         </div>
+//                         <div className="text-xs text-muted-foreground">
+//                           {activeStore ? activeStore.name : `Store #${t.storeId}`} ·{" "}
+//                           {new Date(t.updatedAt).toLocaleString()}
+//                         </div>
+//                       </div>
+//                       <div className="text-sm">
+//                         <span
+//                           className={
+//                             t.status === "completed"
+//                               ? "text-emerald-600"
+//                               : t.status === "in_progress"
+//                               ? "text-primary"
+//                               : t.status === "overdue"
+//                               ? "text-destructive"
+//                               : "text-muted-foreground"
+//                           }
+//                         >
+//                           {t.status.replace("_", " ")}
+//                         </span>
+//                       </div>
+//                     </div>
+//                   ))}
+//                 </div>
+//               )
+//             ) : // staff view
+//             myToday.length === 0 ? (
+//               <EmptyState
+//                 title="No tasks for today"
+//                 desc="Ask your manager to assign a checklist or pick up an available task."
+//                 action={
+//                   availableTasks.length > 0 ? (
+//                     <a href="#available">
+//                       <Button variant="outline">See Available Tasks</Button>
+//                     </a>
+//                   ) : undefined
+//                 }
+//               />
+//             ) : (
+//               <div className="space-y-2">
+//                 {myToday.slice(0, 6).map((t) => (
+//                   <div
+//                     key={t.id}
+//                     className="flex items-center justify-between p-3 rounded-md border hover:bg-muted/50"
+//                   >
+//                     <div className="min-w-0">
+//                       <div className="font-medium truncate">{t.title}</div>
+//                       <div className="text-xs text-muted-foreground">
+//                         {t.dueAt
+//                           ? `Due ${new Date(t.dueAt).toLocaleTimeString([], {
+//                               hour: "2-digit",
+//                               minute: "2-digit",
+//                             })}`
+//                           : "No due time"}
+//                       </div>
+//                     </div>
+//                     <div
+//                       className={cls(
+//                         "text-xs px-2 py-0.5 rounded-full border",
+//                         t.status === "completed" && "border-emerald-600 text-emerald-700",
+//                         t.status === "overdue" && "border-destructive text-destructive",
+//                         t.status !== "completed" &&
+//                           t.status !== "overdue" &&
+//                           "border-muted-foreground/30 text-muted-foreground",
+//                       )}
+//                     >
+//                       {t.status}
+//                     </div>
+//                   </div>
+//                 ))}
+//               </div>
+//             )}
+//           </CardContent>
+//         </Card>
+
+//         {/* Quick actions */}
+//         <Card>
+//           <CardHeader>
+//             <CardTitle>Quick Actions</CardTitle>
+//           </CardHeader>
+//           <CardContent className="space-y-3">
+//             {!isAdmin && (
+//               <Link href="#">
+//                 <Button className="w-full justify-start" variant="outline">
+//                   <div className="w-9 h-9 bg-primary/10 rounded flex items-center justify-center mr-3">
+//                     <QrCode className="w-5 h-5 text-primary" />
+//                   </div>
+//                   Scan QR to Check In
+//                 </Button>
+//               </Link>
+//             )}
+
+//             <Link href="/task-lists">
+//               <Button className="w-full justify-start" variant="outline">
+//                 <div className="w-9 h-9 bg-primary/10 rounded flex items-center justify-center mr-3">
+//                   <Plus className="w-5 h-5 text-primary" />
+//                 </div>
+//                 Create New Task / Checklist
+//               </Button>
+//             </Link>
+//             <Link href="/users">
+//               <Button className="w-full justify-start" variant="outline">
+//                 <div className="w-9 h-9 bg-primary/10 rounded flex items-center justify-center mr-3">
+//                   <Users className="w-5 h-5 text-primary" />
+//                 </div>
+//                 Invite Team Member
+//               </Button>
+//             </Link>
+//             <Link href="/stores">
+//               <Button className="w-full justify-start" variant="outline">
+//                 <div className="w-9 h-9 bg-primary/10 rounded flex items-center justify-center mr-3">
+//                   <Settings className="w-5 h-5 text-primary" />
+//                 </div>
+//                 Store Settings
+//               </Button>
+//             </Link>
+
+//             <div className="pt-3 border-t">
+//               <div className="text-xs text-muted-foreground mb-2">Selected store</div>
+//               <div className="flex items-center gap-3 rounded-md border p-3">
+//                 <div className="w-9 h-9 rounded bg-primary/10 flex items-center justify-center">
+//                   <StoreIcon className="w-5 h-5 text-primary" />
+//                 </div>
+//                 <div className="min-w-0">
+//                   <div className="font-medium truncate">
+//                     {activeStore?.name ?? "No store"}
+//                   </div>
+//                   <div className="text-xs text-muted-foreground truncate">
+//                     {activeStore?.address ?? "—"}
+//                   </div>
+//                 </div>
+//               </div>
+//             </div>
+//           </CardContent>
+//         </Card>
+//       </div>
+
+//       {/* Available tasks (staff) */}
+//       {!isAdmin && availableTasks.length > 0 && (
+//         <Card id="available">
+//           <CardHeader>
+//             <CardTitle>Available Tasks to Claim</CardTitle>
+//           </CardHeader>
+//           <CardContent className="space-y-4">
+//             {availableTasks.slice(0, 3).map((task) => (
+//               <TaskCard key={task.id} task={task} />
+//             ))}
+//           </CardContent>
+//         </Card>
+//       )}
+
+//       {/* Optional: QR scanner modal – keep using your existing component */}
+//       {/* You can wire this to a button state if you want the actual camera modal here */}
+//       {/* <QRScanner isOpen={...} onClose={...} onSuccess={...} /> */}
+//     </div>
+//   );
+// }
+
+// /* ---------------- small helpers ---------------- */
+
+// function KpiCard({
+//   title,
+//   value,
+//   icon: Icon,
+//   tone = "primary",
+//   loading,
+//   sub,
+// }: {
+//   title: string;
+//   value: number | string;
+//   icon: any;
+//   tone?: "primary" | "success" | "info" | "warn";
+//   loading?: boolean;
+//   sub?: string;
+// }) {
+//   const toneClass =
+//     tone === "success"
+//       ? "text-emerald-600"
+//       : tone === "info"
+//       ? "text-sky-600"
+//       : tone === "warn"
+//       ? "text-amber-600"
+//       : "text-primary";
+
+//   return (
+//     <Card>
+//       <CardContent className="p-4">
+//         <div className="flex items-center justify-between">
+//           <div className="min-w-0">
+//             <p className="text-sm text-muted-foreground">{title}</p>
+//             {loading ? (
+//               <LineSkeleton className="h-6 w-20 mt-1" />
+//             ) : (
+//               <p className={cls("text-2xl font-bold", toneClass)}>{value}</p>
+//             )}
+//             {sub && <p className="text-xs text-muted-foreground mt-1 truncate">{sub}</p>}
+//           </div>
+//           <Icon className={cls("w-8 h-8", toneClass)} />
+//         </div>
+//       </CardContent>
+//     </Card>
+//   );
+// }
+
+// function EmptyState({
+//   title,
+//   desc,
+//   action,
+// }: {
+//   title: string;
+//   desc?: string;
+//   action?: React.ReactNode;
+// }) {
+//   return (
+//     <div className="text-center py-12">
+//       <div className="mx-auto w-14 h-14 rounded-full bg-muted flex items-center justify-center mb-3">
+//         <BarChart3 className="w-6 h-6 text-muted-foreground" />
+//       </div>
+//       <h3 className="text-lg font-semibold">{title}</h3>
+//       {desc && <p className="text-muted-foreground mt-1">{desc}</p>}
+//       {action && <div className="mt-4">{action}</div>}
+//     </div>
+//   );
+// }

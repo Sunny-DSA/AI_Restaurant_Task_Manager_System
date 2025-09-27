@@ -1,4 +1,3 @@
-// client/src/components/Layout.tsx
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
@@ -20,6 +19,7 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import ThemeToggle from "@/components/ThemeToggle";
 import CheckinControl from "@/components/CheckinControl";
+import UserMenu from "@/components/UserMenu";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -28,20 +28,19 @@ interface LayoutProps {
 const navigation = [
   { name: "Dashboard", href: "/", icon: Home, key: "dashboard" },
   { name: "Tasks", href: "/tasks", icon: CheckSquare, key: "tasks" },
-  { name: "Task Lists", href: "/task-lists", icon: List, key: "tasks" },
+  { name: "Task Lists", href: "/task-lists", icon: List, key: "task_lists" },
   { name: "Stores", href: "/stores", icon: Store, key: "stores" },
   { name: "Users", href: "/users", icon: Users, key: "users" },
   { name: "Reports", href: "/reports", icon: BarChart3, key: "reports" },
 ];
 
-// Extra page titles that aren’t in the main `navigation` array
 const extraTitles: Record<string, string> = {
   "/admin/photos": "Photo Feed",
 };
 
 export default function Layout({ children }: LayoutProps) {
   const [location] = useLocation();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { isConnected } = useWebSocket();
   const isMobile = useIsMobile();
   const [showThemeToggle, setShowThemeToggle] = useState(false);
@@ -89,10 +88,18 @@ export default function Layout({ children }: LayoutProps) {
   const isEmployeeOrManager =
     user.role === "employee" || user.role === "store_manager";
 
-  // Build mobile items: all permitted nav + optional Photo Feed
   const mobileNav = [
     ...filteredNavigation,
-    ...(isAdmin ? [{ name: "Photo Feed", href: "/admin/photos", icon: List, key: "photo-feed" } as const] : []),
+    ...(isAdmin
+      ? ([
+          {
+            name: "Photo Feed",
+            href: "/admin/photos",
+            icon: List,
+            key: "photo-feed",
+          } as const,
+        ] as const)
+      : []),
   ];
 
   return (
@@ -154,7 +161,7 @@ export default function Layout({ children }: LayoutProps) {
             )}
           </nav>
 
-          {/* User footer */}
+          {/* User footer (desktop) — removed inline logout button */}
           <div className="flex-shrink-0 flex border-t border-gray-200 dark:border-gray-800 p-4">
             <div className="flex items-center w-full">
               <Avatar className="h-10 w-10">
@@ -173,26 +180,12 @@ export default function Layout({ children }: LayoutProps) {
                   </Badge>
                 )}
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => logout()}
-                aria-label="Log out"
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                  />
-                </svg>
-              </Button>
+              {/* Keep the space clean; logout lives in the top user menu */}
+              <Link href="/settings">
+                <Button variant="ghost" size="sm" aria-label="Settings">
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </Link>
             </div>
           </div>
         </div>
@@ -210,9 +203,11 @@ export default function Layout({ children }: LayoutProps) {
             </div>
 
             <div className="flex items-center space-x-2 md:space-x-4">
-              {/* WebSocket status dot */}
+              {/* WebSocket status */}
               <div
-                className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
+                className={`w-2 h-2 rounded-full ${
+                  isConnected ? "bg-green-500" : "bg-red-500"
+                }`}
                 title={isConnected ? "Connected" : "Disconnected"}
               />
 
@@ -224,26 +219,27 @@ export default function Layout({ children }: LayoutProps) {
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowThemeToggle(!showThemeToggle)}
-                aria-label="Settings"
+                aria-label="Theme"
               >
                 <Settings className="h-5 w-5" />
               </Button>
               {showThemeToggle && <ThemeToggle />}
 
               {/* Notifications */}
-              <Button variant="ghost" size="sm" className="relative" aria-label="Notifications">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="relative"
+                aria-label="Notifications"
+              >
                 <Bell className="h-5 w-5" />
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
                   3
                 </span>
               </Button>
 
-              {/* Mobile avatar */}
-              <div className="md:hidden">
-                <Avatar className="h-8 w-8">
-                  <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
-                </Avatar>
-              </div>
+              {/* User menu (works on mobile + desktop) */}
+              <UserMenu />
             </div>
           </div>
         </header>
@@ -251,7 +247,7 @@ export default function Layout({ children }: LayoutProps) {
         <main className="flex-1 pb-20 md:pb-0">{children}</main>
       </div>
 
-      {/* Mobile bottom nav – horizontally scrollable, shows ALL items (plus Photo Feed for admins) */}
+      {/* Mobile bottom nav */}
       {isMobile && (
         <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 z-50">
           <div className="flex gap-2 px-2 py-2 overflow-x-auto no-scrollbar">
@@ -261,11 +257,15 @@ export default function Layout({ children }: LayoutProps) {
                 <Link key={item.href} href={item.href}>
                   <button
                     className={`flex flex-col items-center min-w-[72px] px-3 py-1.5 rounded-md ${
-                      isActive ? "text-primary" : "text-gray-500 dark:text-gray-400"
+                      isActive
+                        ? "text-primary"
+                        : "text-gray-500 dark:text-gray-400"
                     }`}
                   >
                     <item.icon className="h-5 w-5 mb-1" />
-                    <span className="text-xs font-medium truncate">{item.name}</span>
+                    <span className="text-xs font-medium truncate">
+                      {item.name}
+                    </span>
                   </button>
                 </Link>
               );

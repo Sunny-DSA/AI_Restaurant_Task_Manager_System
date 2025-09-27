@@ -1,10 +1,16 @@
-// @client/src/components/TaskDetailsDialog.tsx
+// client/src/components/TaskDetailsDialog.tsx
 import React, { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { taskApi, Task, userApi, User } from "@/lib/api";
+import { taskApi, Task, userApi, User, isAuthError } from "@/lib/api";
 import { hasPermission } from "@/lib/auth";
 
 interface Props {
@@ -31,23 +37,38 @@ export default function TaskDetailsDialog({
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // keep local state in sync when `task` changes
+  useEffect(() => {
+    setStatus(task?.status || "");
+    setNotes(task?.notes || "");
+    setAssigneeId(task?.assigneeId != null ? String(task.assigneeId) : undefined);
+  }, [task]);
+
+  // Load users for the store *only when the dialog is open*.
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
-      if (task?.storeId) {
+    async function loadUsers() {
+      if (!open || !task?.storeId) {
+        if (!open) setUsers([]); // reset when closed
+        return;
+      }
+      try {
         const list = await userApi.getUsers(task.storeId);
-        if (!cancelled) setUsers(list);
+        if (!cancelled) setUsers(list || []);
+      } catch (e: any) {
+        // If the user logs out while the dialog is open, ignore 401/403
+        if (isAuthError(e)) return;
+        console.error("Failed to load users:", e);
+        // keep UI usable; you can show a toast if you prefer
       }
-      if (task) {
-        setStatus(task.status);
-        setNotes(task.notes || "");
-        setAssigneeId(task.assigneeId != null ? String(task.assigneeId) : undefined);
-      }
-    })();
+    }
 
-    return () => { cancelled = true; };
-  }, [task]);
+    loadUsers();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, task?.storeId]);
 
   const handleSave = async () => {
     if (!task) return;
@@ -72,6 +93,11 @@ export default function TaskDetailsDialog({
       onUpdated();
       onClose();
     } catch (err: any) {
+      if (isAuthError(err)) {
+        // user likely logged out — just close silently
+        onClose();
+        return;
+      }
       alert("Error updating task: " + (err?.message || String(err)));
     } finally {
       setLoading(false);
@@ -134,7 +160,9 @@ export default function TaskDetailsDialog({
         <DialogFooter>
           <Button variant="secondary" onClick={onClose}>Close</Button>
           {hasPermission(currentUserRole, "update", "tasks") && (
-            <Button onClick={handleSave} disabled={loading}>Save</Button>
+            <Button onClick={handleSave} disabled={loading}>
+              {loading ? "Saving..." : "Save"}
+            </Button>
           )}
         </DialogFooter>
       </DialogContent>

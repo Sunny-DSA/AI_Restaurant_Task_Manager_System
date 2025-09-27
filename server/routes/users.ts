@@ -65,13 +65,59 @@ r.post(
   requireRole([roleEnum.MASTER_ADMIN, roleEnum.ADMIN, roleEnum.STORE_MANAGER]),
   async (req: Request, res: Response) => {
     try {
-      const created = await AuthService.createUser(req.body as any, req.body?.password);
-      res.json(created);
+      const me = (req as any).user!;
+      const b = (req.body ?? {}) as {
+        firstName?: string;
+        lastName?: string;
+        email?: string;
+        role: string;
+        storeId?: number | null;
+        password?: string;
+      };
+
+      const role = String(b.role || "").toLowerCase();
+
+      // Require store for store-bound roles
+      const needsStore =
+        role === roleEnum.STORE_MANAGER || role === roleEnum.EMPLOYEE;
+      if (needsStore && (b.storeId == null || !Number.isFinite(Number(b.storeId)))) {
+        return res.status(400).json({ message: "Store is required for employees and store managers" });
+      }
+
+      // Store manager can only create users for their own store
+      if (me.role === roleEnum.STORE_MANAGER) {
+        if (!me.storeId) {
+          return res.status(403).json({ message: "Store assignment required to create users" });
+        }
+        if (needsStore && Number(b.storeId) !== Number(me.storeId)) {
+          return res.status(403).json({ message: "Cannot create users for a different store" });
+        }
+        // Store managers may not create admins
+        if (role === roleEnum.ADMIN || role === roleEnum.MASTER_ADMIN) {
+          return res.status(403).json({ message: "Store managers cannot create admins" });
+        }
+      }
+
+      // Require password for admin / master_admin (if that’s your policy)
+      if ((role === roleEnum.ADMIN || role === roleEnum.MASTER_ADMIN) && !b.password) {
+        return res.status(400).json({ message: "Password is required for admin accounts" });
+      }
+
+      const created = await AuthService.createUser(
+        {
+          ...b,
+          storeId: needsStore ? Number(b.storeId) : null,
+        } as any,
+        b.password
+      );
+
+      return res.json(created);
     } catch (err: any) {
-      res.status(400).json({ message: err?.message || "Failed to create user" });
+      return res.status(400).json({ message: err?.message || "Failed to create user" });
     }
   }
 );
+
 
 r.put(
   "/users/:id/pin",

@@ -1,3 +1,4 @@
+// client/src/App.tsx
 import { Switch, Route, useLocation } from "wouter";
 import { useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,6 +19,28 @@ import Login from "@/pages/Login";
 import Logout from "@/pages/Logout";
 import NotFound from "@/pages/not-found";
 import PhotoFeed from "@/pages/PhotoFeed";
+import { canAccessPage } from "@/lib/auth";
+
+/** Guard a single page by role; redirect home if unauthorized. */
+function RequirePage({
+  page,
+  children,
+}: {
+  page: string;
+  children: JSX.Element;
+}) {
+  const { user } = useAuth();
+  const [, setLocation] = useLocation();
+
+  const role = user?.role || "employee";
+  const allowed = canAccessPage(role, page);
+
+  useEffect(() => {
+    if (!allowed) setLocation("/", { replace: true });
+  }, [allowed, setLocation]);
+
+  return allowed ? children : null;
+}
 
 /** Protected shell: if not authenticated -> redirect to /login */
 function ProtectedRoutes() {
@@ -45,11 +68,43 @@ function ProtectedRoutes() {
         <Route path="/task-lists" component={TaskLists} />
         <Route path="/tasklists" component={TaskListsPage} />
         <Route path="/tasklists/run/:id" component={TaskListRunPage} />
-        <Route path="/stores" component={Stores} />
-        <Route path="/users" component={Users} />
-        <Route path="/reports" component={Reports} />
-        {/* NEW: admin photo feed */}
-        <Route path="/admin/photos" component={PhotoFeed} />
+
+        {/* Admin-only routes guarded by RequirePage */}
+        <Route
+          path="/stores"
+          component={() => (
+            <RequirePage page="stores">
+              <Stores />
+            </RequirePage>
+          )}
+        />
+        <Route
+          path="/users"
+          component={() => (
+            <RequirePage page="users">
+              <Users />
+            </RequirePage>
+          )}
+        />
+        <Route
+          path="/reports"
+          component={() => (
+            <RequirePage page="reports">
+              <Reports />
+            </RequirePage>
+          )}
+        />
+
+        {/* Example for an admin utility page */}
+        <Route
+          path="/admin/photos"
+          component={() => (
+            <RequirePage page="admin">
+              <PhotoFeed />
+            </RequirePage>
+          )}
+        />
+
         {/* Fallback must be LAST */}
         <Route component={NotFound} />
       </Switch>
